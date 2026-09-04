@@ -128,7 +128,20 @@ input[type="range"] { padding: 0; accent-color: var(--brass); }
 }
 .hud-log .log li:first-child { color: var(--ink); border-left-color: var(--blood); }
 
-.hud-hole { position: absolute; left: 18px; bottom: 74px; display: flex; gap: 6px; }
+/*
+ * The peek prompt, where the card readout used to be.
+ *
+ * Phase 3 printed the player's own hand in this corner. Phase 4 took it away:
+ * the cards are on the felt and you lift them to look, in front of everybody.
+ */
+.hud-hint {
+  position: absolute; left: 18px; bottom: 78px;
+  display: grid; gap: 3px; max-width: 260px;
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  text-shadow: 0 1px 4px #000; pointer-events: none;
+}
+.hud-hint .hint-strong { color: var(--brass); }
+.hud-hint .hint-quiet { color: var(--ink-dim); text-transform: none; letter-spacing: 0.02em; }
 
 .hud-actions {
   position: absolute; left: 0; right: 0; bottom: 0;
@@ -147,25 +160,6 @@ input[type="range"] { padding: 0; accent-color: var(--brass); }
   padding: 14px 26px; background: rgba(10, 6, 6, 0.86);
   border: 1px solid var(--blood); color: #e5b3ac; letter-spacing: 0.08em;
 }
-
-/* --- cards (DOM, for the HUD readout) ------------------------------------ */
-
-.card {
-  width: 42px; height: 58px; border-radius: 3px; background: #e8e2d8; color: #14100e;
-  display: grid; place-items: center; align-content: center; line-height: 1;
-  border: 1px solid #b9b1a4; font-family: Georgia, serif;
-}
-.card b { font-size: 17px; font-weight: 700; }
-.card i { font-size: 15px; font-style: normal; }
-.card.hearts, .card.diamonds { color: #9c2018; }
-.card.small { width: 34px; height: 47px; }
-.card.small b { font-size: 14px; }
-.card.small i { font-size: 12px; }
-.card.back {
-  background: repeating-linear-gradient(45deg, #2a1c1a, #2a1c1a 4px, #1f1513 4px, #1f1513 8px);
-  border-color: #3b2926;
-}
-.card.empty { background: transparent; border: 1px dashed #24312a; }
 
 /* --- lobby (plain DOM, before the table) --------------------------------- */
 

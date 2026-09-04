@@ -1,12 +1,15 @@
 import {
   CLIENT_MESSAGE_SCHEMAS,
+  PRESENCE,
+  PRESENCE_MESSAGES,
   type BlindStructure,
   type ClientMessageName,
   type ErrorCode,
   type MatchEvent,
+  type PresenceInput,
 } from '@cursed/shared';
 import { MatchError, type MatchTimings } from '../match/match.js';
-import { SystemClock, type Clock } from '../match/clock.js';
+import { SystemClock, type Clock, type TimerHandle } from '../match/clock.js';
 import type { RandomSource } from '../poker/index.js';
 import { RateLimiter } from './rate-limit.js';
 import { RoomManager, type Room } from './rooms.js';
@@ -33,6 +36,16 @@ export interface GameServerOptions {
   messagesPerSecond?: number;
   /** Lobby create/join attempts allowed per address per minute. */
   joinsPerMinute?: number;
+  /**
+   * Body reports allowed per second per connection.
+   *
+   * Metered separately from everything else. Presence arrives fifteen times a
+   * second by design, and if it shared a bucket with poker actions then turning
+   * your head would eat the budget you need to fold.
+   */
+  presencePerSecond?: number;
+  /** How often the table's bodies are broadcast. Zero disables the tick. */
+  presenceHz?: number;
 }
 
 interface ConnectionState {
@@ -53,6 +66,9 @@ export class GameServer {
   readonly #unsubscribes = new Map<string, () => void>();
   readonly #messageLimiter: RateLimiter;
   readonly #joinLimiter: RateLimiter;
+  readonly #presenceLimiter: RateLimiter;
+  readonly #presenceIntervalMs: number;
+  #presenceTimer: TimerHandle | null = null;
 
   constructor(options: GameServerOptions) {
     this.#clock = options.clock ?? new SystemClock();
@@ -80,10 +96,24 @@ export class GameServer {
       now: () => this.#clock.now(),
     });
 
+    // Headroom over the client's own send rate, so a burst after a stall is
+    // absorbed rather than dropped, but still a hard ceiling.
+    const presencePerSecond = options.presencePerSecond ?? PRESENCE.clientHz + 5;
+    this.#presenceLimiter = new RateLimiter({
+      capacity: presencePerSecond * 2,
+      refillPerSecond: presencePerSecond,
+      now: () => this.#clock.now(),
+    });
+
+    const presenceHz = options.presenceHz ?? PRESENCE.broadcastHz;
+    this.#presenceIntervalMs = presenceHz > 0 ? Math.round(1000 / presenceHz) : 0;
+
     this.#transport.onConnection((connection) => this.#onConnection(connection));
   }
 
   async close(): Promise<void> {
+    this.#clock.clearTimeout(this.#presenceTimer);
+    this.#presenceTimer = null;
     for (const unsubscribe of this.#unsubscribes.values()) unsubscribe();
     this.#unsubscribes.clear();
     for (const state of this.#states.values()) state.connection.close();
@@ -107,6 +137,7 @@ export class GameServer {
     }
     this.#messageLimiter.sweep();
     this.#joinLimiter.sweep();
+    this.#presenceLimiter.sweep();
   }
 
   // -------------------------------------------------------------------------
@@ -130,13 +161,25 @@ export class GameServer {
     if (!isClientMessage(name)) {
       return this.#fail(state, ack, 'BAD_REQUEST', `Unknown message "${name}"`);
     }
-    if (!this.#messageLimiter.tryConsume(state.connection.id)) {
+    // Bodies and decisions are metered separately; see `presencePerSecond`.
+    const isPresence = PRESENCE_MESSAGES.has(name);
+    const limiter = isPresence ? this.#presenceLimiter : this.#messageLimiter;
+
+    // A body report is sent unacknowledged fifteen times a second. Rejecting one
+    // out loud would put an error banner on a player's screen for turning their
+    // head, so an unacknowledged presence failure is simply dropped — the next
+    // report is 66ms away and will say the same thing.
+    const quiet = isPresence && !ack;
+
+    if (!limiter.tryConsume(state.connection.id)) {
+      if (quiet) return;
       return this.#fail(state, ack, 'RATE_LIMITED', 'Slow down');
     }
 
     // Untrusted input stops here: nothing below sees an unparsed payload.
     const parsed = CLIENT_MESSAGE_SCHEMAS[name].safeParse(payload ?? {});
     if (!parsed.success) {
+      if (quiet) return;
       const issue = parsed.error.issues[0];
       return this.#fail(
         state,
@@ -159,6 +202,10 @@ export class GameServer {
         return this.#start(state, ack);
       case 'poker:action':
         return this.#action(state, parsed.data as { handNumber: number; action: never }, ack);
+      case 'poker:peek':
+        return this.#peek(state, parsed.data as { handNumber: number }, ack);
+      case 'player:presence':
+        return this.#presence(state, parsed.data as PresenceInput, ack);
     }
   }
 
@@ -232,6 +279,24 @@ export class GameServer {
     this.#ok(ack);
   }
 
+  #peek(state: ConnectionState, payload: { handNumber: number }, ack?: AckFn): void {
+    const { room, playerId } = this.#require(state);
+    // The cards are not in this reply. Marking the seat as having looked causes
+    // the match to push a fresh view, and the view is where the cards live.
+    room.match.peek(playerId, payload.handNumber);
+    this.#ok(ack);
+  }
+
+  #presence(state: ConnectionState, payload: PresenceInput, ack?: AckFn): void {
+    // Silently ignored outside a room: a body report is not worth an error, and
+    // a client that has not joined yet has nothing to report about.
+    if (state.roomCode && state.playerId) {
+      const room = this.rooms.get(state.roomCode);
+      room?.match.reportPresence(state.playerId, payload);
+    }
+    this.#ok(ack);
+  }
+
   // -------------------------------------------------------------------------
 
   #require(state: ConnectionState): { room: Room; playerId: string } {
@@ -267,6 +332,38 @@ export class GameServer {
     room.match.setConnected(playerId, true);
     this.rooms.touch(room.code);
     this.#push(room, [], playerId);
+    this.#startPresenceTick();
+  }
+
+  /**
+   * Broadcasts every occupied table's bodies on a fixed tick.
+   *
+   * Separate from the view push on purpose: presence changes fifteen times a
+   * second and a full view for six players does not. One frame, sent to
+   * everybody, because presence has no per-viewer half.
+   */
+  #startPresenceTick(): void {
+    if (this.#presenceTimer || this.#presenceIntervalMs <= 0) return;
+
+    const tick = () => {
+      this.#presenceTimer = null;
+      let talkedToAnyone = false;
+
+      for (const [code, sockets] of this.#roomSockets) {
+        const room = this.rooms.get(code);
+        if (!room || sockets.size === 0) continue;
+        const frame = room.match.presenceFor();
+        for (const connection of sockets.values()) connection.send('presence', frame);
+        talkedToAnyone = true;
+      }
+
+      // Nobody is listening. Stop rather than ticking twelve times a second at
+      // an empty process; `#attach` starts it again when somebody sits down.
+      if (!talkedToAnyone) return;
+      this.#presenceTimer = this.#clock.setTimeout(tick, this.#presenceIntervalMs);
+    };
+
+    this.#presenceTimer = this.#clock.setTimeout(tick, this.#presenceIntervalMs);
   }
 
   #onClose(state: ConnectionState): void {

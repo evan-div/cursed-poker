@@ -20,19 +20,25 @@ hands**, through one function.
 
 ## Status
 
-**Phases 1 and 2 complete — the game is playable online.**
+**Phases 1-4 complete — four to six friends can sit at the table and play.**
 
 - **The poker engine.** No-Limit Hold'em for 4-6 players: side pots, split pots,
   correct raise-reopening rules, big-blind antes, button rotation, blind
   progression. Pure, browser-free and framework-free.
 - **Private lobbies over the wire.** Authoritative server, invite codes,
   reconnect that restores your seat and your cards, disconnect handling, rate
-  limiting, and a plain developer UI you can finish a whole tournament in.
+  limiting.
+- **The table in 3D.** A round table of seven, six seated players and the hooded
+  figure that deals to them, from a first-person seat you cannot get up from.
+- **Bodies.** You lift your own cards to look at them, and everybody watches you
+  do it. Where you look, how far you lifted, and whether your hands are on your
+  chips all reach the rest of the table — and going quiet just makes you still.
 
-156 tests, including 140 fuzzed whole matches, a shuffle fairness suite, and a
+255 tests, including 140 fuzzed whole matches, a shuffle fairness suite, and a
 hidden-information suite that audits every player's view at every decision point.
 
-Nothing is rendered in 3D yet, by design — see [docs/ROADMAP.md](docs/ROADMAP.md).
+The Dealer, the lighting, stress, tells, perks and sacrifices are still ahead —
+see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Layout
 
@@ -60,6 +66,19 @@ That starts both the server (:3001) and the dev UI (:5173) together, labels thei
 output, and stops both on Ctrl-C. Open <http://localhost:5173> in four to six
 tabs — one player creates a lobby, the others join with the code, everyone
 readies up, the host begins.
+
+### At the table
+
+| | |
+|---|---|
+| Look around | drag, or click the table for pointer lock (Escape releases) |
+| **Look at your cards** | hold right-click or `V`, then pull the mouse toward you |
+| Act | `F` fold · `C` check/call · `R` raise · `A` all in, or click |
+| Size a bet | the slider, or the mouse wheel over it |
+
+You will not see your own cards until you lift them. That is deliberate: the
+look is the game. Everyone at the table can see you take it, and see how long
+you spend, and see you take another one right after the flop.
 
 To run them in separate terminals instead:
 
@@ -97,6 +116,11 @@ npm run typecheck
 npm run sim       # whole-match fuzzing only
 npm run shots     # drive real browsers around the table and screenshot it
 ```
+
+`npm run shots` needs `npm run dev` already running. In a development build the
+browser console also has `__bodies()`, which reports what that client believes
+every seat's body is doing — the room is dark and players block their own cards,
+so replication is easier to check as numbers than as a picture.
 
 ## Documents
 

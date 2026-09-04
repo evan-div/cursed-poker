@@ -1,5 +1,11 @@
 import { io, type Socket } from 'socket.io-client';
-import type { ClientMessageName, ClientView, MatchEvent, SessionGrant } from '@cursed/shared';
+import type {
+  ClientMessageName,
+  ClientView,
+  MatchEvent,
+  PresenceFrame,
+  SessionGrant,
+} from '@cursed/shared';
 
 /**
  * The client half of the transport seam.
@@ -18,6 +24,8 @@ export class GameConnection {
   readonly socket: Socket;
   onView: (view: ClientView) => void = () => {};
   onEvents: (events: MatchEvent[]) => void = () => {};
+  /** The table's bodies, on the server's tick. Public state, so no secrets here. */
+  onPresence: (frame: PresenceFrame) => void = () => {};
   onError: (error: { code: string; message: string }) => void = () => {};
   onStatus: (connected: boolean) => void = () => {};
 
@@ -25,6 +33,7 @@ export class GameConnection {
     this.socket = io(SERVER_URL, { transports: ['websocket'] });
     this.socket.on('view', (view: ClientView) => this.onView(view));
     this.socket.on('events', (events: MatchEvent[]) => this.onEvents(events));
+    this.socket.on('presence', (frame: PresenceFrame) => this.onPresence(frame));
     this.socket.on('error', (error: { code: string; message: string }) => this.onError(error));
     this.socket.on('connect', () => {
       this.onStatus(true);
@@ -37,6 +46,24 @@ export class GameConnection {
     return new Promise((resolve) => {
       this.socket.emit(name, payload, (response: Ack<T>) => resolve(response));
     });
+  }
+
+  /**
+   * Fire-and-forget, for the body report.
+   *
+   * Fifteen a second, and nothing useful to do with a reply: a dropped report
+   * is corrected by the next one 66ms later, and waiting on acks would queue
+   * promises faster than they resolved on a bad connection.
+   *
+   * Not `socket.volatile.emit`, which is what this looks like it wants. Volatile
+   * packets are dropped whenever the transport is not immediately writable, and
+   * it turned out to drop *all* of them here — the whole tell system was silently
+   * inert, with no error anywhere, until the server was instrumented to count
+   * what arrived. A channel that fails closed and says nothing is a bad trade for
+   * saving a few bytes on a stalled connection.
+   */
+  tell(name: ClientMessageName, payload: unknown): void {
+    this.socket.emit(name, payload);
   }
 
   /** Reconnecting is automatic: the seat is held, and so are the cards. */

@@ -12,7 +12,8 @@
 import { z } from 'zod';
 import type { ClientView } from './view.js';
 import type { HandEvent } from './hand-events.js';
-import { MAX_PLAYERS } from './config.js';
+import type { PresenceFrame } from './presence.js';
+import { MAX_PLAYERS, SEAT_COUNT } from './config.js';
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -55,6 +56,49 @@ export const playerActionSchema = z.discriminatedUnion('type', [
 // Client -> server
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a player is looking, as a target rather than a vector.
+ *
+ * See `presence.ts` for why this is coarse. The seat index is bounded here so a
+ * malformed or hostile client cannot make the server carry an arbitrary number
+ * into the presence frame every other player renders.
+ */
+export const gazeTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('SEAT'), seatIndex: z.number().int().min(0).max(SEAT_COUNT - 1) }),
+  z.object({ kind: z.literal('DEALER') }),
+  z.object({ kind: z.literal('BOARD') }),
+  z.object({ kind: z.literal('POT') }),
+  z.object({ kind: z.literal('OWN_CARDS') }),
+  z.object({ kind: z.literal('OWN_CHIPS') }),
+  z.object({ kind: z.literal('AWAY') }),
+]);
+
+/**
+ * A player's own body, reported to the server.
+ *
+ * This is the one message a client sends many times a second, and the only one
+ * whose contents are *about* the player rather than about poker. It cannot
+ * change a chip, a card or a turn — the server rejects nothing here because
+ * there is nothing here to reject beyond its own shape.
+ */
+export const presenceUpdateSchema = z.object({
+  gaze: gazeTargetSchema,
+  peek: z.number().min(0).max(1),
+  handlingChips: z.boolean(),
+});
+
+/**
+ * "I am lifting my cards."
+ *
+ * The server answers by marking the seat as having looked, which puts the
+ * player's own hole cards into their next projected view. It does *not* answer
+ * with the cards: acks are not a path for match state, and adding a second path
+ * would end the single-boundary guarantee this project rests on.
+ */
+export const peekSchema = z.object({
+  handNumber: z.number().int().positive(),
+});
+
 export const createLobbySchema = z.object({ displayName: displayNameSchema });
 
 export const joinLobbySchema = z.object({
@@ -78,6 +122,8 @@ export const submitActionSchema = z.object({
   action: playerActionSchema,
 });
 
+export type PresenceUpdatePayload = z.infer<typeof presenceUpdateSchema>;
+export type PeekPayload = z.infer<typeof peekSchema>;
 export type CreateLobbyPayload = z.infer<typeof createLobbySchema>;
 export type JoinLobbyPayload = z.infer<typeof joinLobbySchema>;
 export type ResumeSessionPayload = z.infer<typeof resumeSessionSchema>;
@@ -93,7 +139,17 @@ export const CLIENT_MESSAGE_SCHEMAS = {
   'lobby:ready': setReadySchema,
   'lobby:start': startMatchSchema,
   'poker:action': submitActionSchema,
+  'poker:peek': peekSchema,
+  'player:presence': presenceUpdateSchema,
 } as const;
+
+/**
+ * Messages that describe a body rather than a decision.
+ *
+ * They arrive at fifteen a second and are metered separately, so a player
+ * turning their head cannot use up the budget they need to fold.
+ */
+export const PRESENCE_MESSAGES = new Set<ClientMessageName>(['player:presence']);
 
 export type ClientMessageName = keyof typeof CLIENT_MESSAGE_SCHEMAS;
 
@@ -157,6 +213,14 @@ export interface ServerMessages {
   view: (view: ClientView) => void;
   /** Narration for animation and the log. Never a source of truth. */
   events: (events: MatchEvent[]) => void;
+  /**
+   * Everybody's body, on a fixed tick.
+   *
+   * Split from `view` because it changes at a completely different rate: a full
+   * view for six players fifteen times a second would be most of a megabit for
+   * a game where nothing had happened. Every field in it is public.
+   */
+  presence: (frame: PresenceFrame) => void;
   error: (error: { code: ErrorCode; message: string }) => void;
 }
 

@@ -75,7 +75,23 @@ export interface HandView {
 export interface SelfView {
   playerId: string;
   seatIndex: number | null;
+  /**
+   * The viewer's own two cards — **once they have looked at them**.
+   *
+   * Null until this player peeks in this hand, and null again the moment the
+   * next one is dealt. Cards are not pushed at the deal, because a client that
+   * is handed its cards for free can render them for a whole hand without ever
+   * moving, and then peeking is decoration: an animation a modified client
+   * would simply skip.
+   *
+   * Making the look load-bearing costs one gesture a hand and buys the thing the
+   * game is about — every player must physically lift their cards at least once,
+   * in front of everybody, and every lift after that is a decision somebody
+   * might be watching.
+   */
   holeCards: Card[] | null;
+  /** Whether this player has looked at their cards in the current hand. */
+  hasPeeked: boolean;
   /** Null unless it is this player's turn. */
   legalActions: LegalActions | null;
 }

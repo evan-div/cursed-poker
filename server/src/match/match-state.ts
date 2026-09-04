@@ -1,5 +1,6 @@
 import type { BlindStructure, HandResult, MatchPhase, MatchStatus } from '@cursed/shared';
 import type { TableState } from '../poker/index.js';
+import type { PresenceState } from './presence.js';
 
 /**
  * Authoritative match state.
@@ -38,6 +39,15 @@ export interface MatchState {
   players: PlayerRecord[];
   structure: BlindStructure;
   table: TableState | null;
+
+  /**
+   * Bodies: gaze, card peeking, hands on chips.
+   *
+   * Deliberately beside the table rather than inside it. Nothing in `presence`
+   * can reach a hand, and the only thing a hand reads back is whether a player
+   * has looked at their own cards — one bit, never what they saw.
+   */
+  presence: PresenceState;
 
   /**
    * The blind clock, split so it can be paused. Phase 8's perk ritual and any

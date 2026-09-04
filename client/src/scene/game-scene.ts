@@ -8,13 +8,34 @@ import {
   Vector3,
   WebGLRenderer,
 } from 'three';
-import type { ClientView } from '@cursed/shared';
+import type { ClientView, GazeTarget, MatchEvent, PresenceFrame } from '@cursed/shared';
 import { buildRoom } from './table.js';
 import { SeatedCamera } from './seated-camera.js';
 import { Avatar } from './avatar.js';
 import { Dealer, buildTrophyTray } from './dealer.js';
 import { CardRenderer } from './cards.js';
 import { ChipRenderer } from './chips.js';
+import { ATTENTION_WEIGHT } from './attention.js';
+import { gazePoint } from './gaze.js';
+import { CardPeekController } from '../interaction/card-peek-controller.js';
+import { POT_POSITION, RADIUS, seatPoint } from './layout.js';
+
+/** Everything the scene needs to report outward. Wired up in `main.ts`. */
+export interface GameSceneHooks {
+  /** The player started lifting their cards: ask the server for them. */
+  onFirstLook: () => void;
+  /** Their exposure changed, for reporting to the table. */
+  onExposure: (exposure: number) => void;
+  /** They are now looking at something different. */
+  onGaze: (target: GazeTarget) => void;
+}
+
+/** Seats with a player in them, for a view with no hand in progress. */
+function occupiedSeats(view: ClientView): number[] {
+  return view.players
+    .filter((player) => player.seatIndex !== null && player.seated)
+    .map((player) => player.seatIndex!);
+}
 
 /**
  * The 3D table.
@@ -28,6 +49,11 @@ import { ChipRenderer } from './chips.js';
  * It also never renders a card it was not given. Face-down cards are drawn from
  * the same geometry with the back texture; there is no code path that turns an
  * unknown card into a known one, because there is no unknown card to turn.
+ *
+ * Phase 4 added a second input to that function: the presence frame, which says
+ * what everybody's *body* is doing. It is applied the same way — straight onto
+ * the scene, derived from nothing — and it is what makes the table a room full
+ * of people rather than a board with names on it.
  */
 export class GameScene {
   readonly scene = new Scene();
@@ -35,7 +61,10 @@ export class GameScene {
   readonly seated: SeatedCamera;
 
   /** Called once per rendered frame, after the camera has settled. */
-  onFrame: (() => void) | null = null;
+  onFrame: ((deltaSeconds: number) => void) | null = null;
+
+  /** Lifting your own cards. Owned here because the frame loop drives it. */
+  readonly peek: CardPeekController;
 
   #canvas: HTMLCanvasElement;
   #running = false;
@@ -45,12 +74,22 @@ export class GameScene {
 
   #free: { x: number; y: number; z: number } | null = null;
   #avatars = new Map<number, Avatar>();
+  #actingSeat: number | null | undefined;
+  #handNumber: number | null = null;
+  #lastPresence: PresenceFrame | null = null;
   #dealer = new Dealer();
   #cards = new CardRenderer();
   #chips = new ChipRenderer();
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, hooks: GameSceneHooks) {
     this.#canvas = canvas;
+    this.peek = new CardPeekController({
+      onFirstLook: hooks.onFirstLook,
+      onExposure: (exposure) => {
+        hooks.onExposure(exposure);
+        this.#cards.setLocalPeek(this.#seatIndex ?? null, exposure);
+      },
+    });
 
     this.renderer = new WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     // Capped: a 3x retina display would otherwise quadruple the pixel cost for
@@ -68,7 +107,13 @@ export class GameScene {
 
     this.seated = new SeatedCamera(this.#aspect());
     this.seated.sitAt(null);
+    this.seated.onGazeChanged = hooks.onGaze;
+    // Lifting a card and turning your head are the same physical movement, so
+    // the peek takes the pointer while it is held and the camera stays put.
+    this.seated.pointerIsConsumed = () => this.peek.holding;
+    this.seated.onPointerConsumed = (dx, dy) => this.peek.pointerMoved(dx, dy);
     this.seated.attach(canvas);
+    this.peek.attach(canvas);
 
     // Exposed so the performance budget can be read from a real browser.
     (window as unknown as { __sceneStats?: () => unknown }).__sceneStats = () => this.stats();
@@ -94,6 +139,22 @@ export class GameScene {
         rows['dealer'] = `y ${box.min.y.toFixed(2)}..${box.max.y.toFixed(2)} size ${size.x.toFixed(2)}x${size.y.toFixed(2)}x${size.z.toFixed(2)}`;
         return rows;
       };
+
+      // What this client believes everyone's body is doing. The scene is dark
+      // and people block their own cards, so replication is far easier to check
+      // as numbers than as a screenshot — and this is the only honest way to
+      // ask "did the table actually see that?" from the outside.
+      (window as unknown as { __bodies?: unknown }).__bodies = () => ({
+        frameAgeMs: this.#lastPresence ? Date.now() - this.#lastPresence.serverTime : null,
+        me: { seat: this.#seatIndex ?? null, peek: this.peek.exposure, gaze: this.seated.gaze },
+        table: (this.#lastPresence?.seats ?? []).map((seat) => ({
+          seat: seat.seatIndex,
+          peek: seat.peek,
+          gaze: seat.gaze,
+          stillMs: seat.stillMs,
+          present: seat.present,
+        })),
+      });
 
       (window as unknown as { __freeLook?: unknown }).__freeLook = (
         x: number,
@@ -122,9 +183,93 @@ export class GameScene {
       this.#seatIndex = view.you.seatIndex;
       this.seated.sitAt(view.you.seatIndex);
     }
+
+    const seats = (view.hand?.seats ?? []).map((seat) => seat.seatIndex);
+    this.seated.setSeats(seats.length > 0 ? seats : occupiedSeats(view));
+
+    // A new hand: the cards go back down and everybody has to look again.
+    const handNumber = view.hand?.handNumber ?? null;
+    if (handNumber !== this.#handNumber) {
+      this.#handNumber = handNumber;
+      this.peek.reset();
+      this.#cards.setLocalPeek(this.#seatIndex ?? null, 0);
+    }
+
     this.#applyAvatars(view);
     this.#cards.apply(view);
     this.#chips.apply(view);
+    this.#biasAttention(view);
+  }
+
+  /** Everybody else's bodies, straight from the server's broadcast. */
+  applyPresence(frame: PresenceFrame): void {
+    this.#lastPresence = frame;
+    this.#cards.applyPresence(frame);
+    for (const seat of frame.seats) {
+      const avatar = this.#avatars.get(seat.seatIndex);
+      if (!avatar) continue;
+      // The local player's own body is driven by their own input, not by an
+      // echo of it arriving 80ms later.
+      if (seat.seatIndex === this.#seatIndex) continue;
+      avatar.setGaze(seat.gaze);
+      avatar.setPeek(seat.peek);
+    }
+  }
+
+  /**
+   * Turns the player's head toward whatever just mattered.
+   *
+   * A nudge, never a lock — see `attention.ts`. Everything here is driven by
+   * narration the whole table receives, so nobody's attention is pulled toward
+   * something they were not entitled to notice.
+   */
+  notify(events: MatchEvent[]): void {
+    const now = performance.now();
+    for (const event of events) {
+      switch (event.type) {
+        case 'PLAYER_ACTED': {
+          const weight = event.allIn
+            ? ATTENTION_WEIGHT.allIn
+            : event.action.type === 'RAISE' || event.action.type === 'BET'
+              ? ATTENTION_WEIGHT.raise
+              : 0;
+          if (weight > 0) this.#lookAtSeat(event.seatIndex, weight, now);
+          break;
+        }
+        case 'STREET_DEALT':
+          this.seated.focusOn(POT_POSITION, ATTENTION_WEIGHT.deal, now);
+          break;
+        case 'HOLE_CARDS_DEALT':
+          this.seated.focusOn(
+            gazePoint({ kind: 'DEALER' }, this.#seatIndex ?? 0)!,
+            ATTENTION_WEIGHT.deal,
+            now,
+          );
+          break;
+        case 'SHOWDOWN':
+          this.seated.focusOn(POT_POSITION, ATTENTION_WEIGHT.reckoning, now, 2_200);
+          break;
+        case 'PLAYER_ELIMINATED':
+          this.#lookAtSeat(event.seatIndex, ATTENTION_WEIGHT.reckoning, now, 2_600);
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  #biasAttention(view: ClientView): void {
+    const acting = view.hand?.actingSeat ?? null;
+    if (acting === this.#actingSeat) return;
+    this.#actingSeat = acting;
+    // Your own turn does not pull your head anywhere; you know where you are.
+    if (acting === null || acting === this.#seatIndex) return;
+    this.#lookAtSeat(acting, ATTENTION_WEIGHT.turn, performance.now());
+  }
+
+  #lookAtSeat(seatIndex: number, weight: number, now: number, durationMs?: number): void {
+    if (seatIndex === this.#seatIndex) return;
+    this.seated.focusOn(seatPoint(seatIndex, RADIUS.body, 1.21), weight, now, durationMs);
   }
 
   #applyAvatars(view: ClientView): void {
@@ -157,6 +302,7 @@ export class GameScene {
   dispose(): void {
     this.stop();
     this.#resizeObserver?.disconnect();
+    this.peek.detach();
     this.seated.detach();
     this.renderer.dispose();
   }
@@ -174,14 +320,19 @@ export class GameScene {
   #frame(now: number): void {
     const delta = Math.min((now - this.#lastFrame) / 1000, 0.1);
     this.#lastFrame = now;
+
+    this.peek.update(delta);
+    this.#cards.updatePoses();
+    for (const avatar of this.#avatars.values()) avatar.update(delta);
+
     if (this.#free) {
       this.seated.camera.position.set(this.#free.x, this.#free.y, this.#free.z);
       this.seated.camera.lookAt(0, 0.8, 0);
     } else {
-      this.seated.update(delta);
+      this.seated.update(delta, now);
     }
     this.renderer.render(this.scene, this.seated.camera);
-    this.onFrame?.();
+    this.onFrame?.(delta);
   }
 
   #aspect(): number {

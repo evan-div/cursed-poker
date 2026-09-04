@@ -10,6 +10,8 @@ import {
   type ErrorCode,
   type MatchEvent,
   type PlayerAction,
+  type PresenceFrame,
+  type PresenceInput,
 } from '@cursed/shared';
 import {
   CryptoRandomSource,
@@ -32,7 +34,14 @@ import {
   type MatchState,
   type PlayerRecord,
 } from './match-state.js';
-import { projectForViewer } from './projection.js';
+import {
+  createPresence,
+  forgetSeat,
+  markPeeked,
+  reportPresence,
+  resetForHand,
+} from './presence.js';
+import { presenceFrame, projectForViewer } from './projection.js';
 
 /**
  * The outer state machine: one lobby, from empty room to last player standing.
@@ -115,6 +124,7 @@ export class Match {
       players: [],
       structure: options.structure ?? DEFAULT_BLIND_STRUCTURE,
       table: null,
+      presence: createPresence(),
       clockElapsedMs: 0,
       clockRunningSince: null,
       actionDeadline: null,
@@ -134,6 +144,11 @@ export class Match {
 
   viewFor(playerId: string | null): ClientView {
     return projectForViewer(this.state, playerId, this.#clock.now());
+  }
+
+  /** The table's bodies. Public to everyone, so there is no viewer argument. */
+  presenceFor(): PresenceFrame {
+    return presenceFrame(this.state, this.#clock.now());
   }
 
   dispose(): void {
@@ -191,6 +206,7 @@ export class Match {
     }
     const index = this.state.players.findIndex((p) => p.playerId === playerId);
     if (index < 0) return;
+    forgetSeat(this.state.presence, this.state.players[index]!.seatIndex);
     this.state.players.splice(index, 1);
 
     if (this.state.hostPlayerId === playerId && this.state.players[0]) {
@@ -285,6 +301,59 @@ export class Match {
 
     player.timeouts = 0;
     this.#applyAction(player.seatIndex, action);
+  }
+
+  // -------------------------------------------------------------------------
+  // Bodies
+  // -------------------------------------------------------------------------
+
+  /**
+   * Records what a player's body is doing.
+   *
+   * Deliberately silent: it does not flush, because presence is broadcast on its
+   * own tick. Pushing a full view every time somebody turned their head would be
+   * six players' worth of chips, cards and legal actions fifteen times a second,
+   * for a game in which nothing had happened.
+   */
+  reportPresence(playerId: string, input: PresenceInput): void {
+    const player = findPlayer(this.state, playerId);
+    if (!player || player.eliminatedAt !== null) return;
+    reportPresence(this.state.presence, player.seatIndex, input, this.#clock.now());
+  }
+
+  /**
+   * "I am lifting my cards."
+   *
+   * The reply is not the cards. It is a fresh view, which *contains* the cards
+   * because the seat is now marked as having looked — the same single boundary
+   * every other byte of match state goes through.
+   *
+   * Peeking is not narrated as an event. A permanent line in the log saying
+   * "seat 3 checked their cards" would be a better record than anyone at a real
+   * table has; observation here should be live, fallible and easy to miss.
+   */
+  peek(playerId: string, handNumber: number): void {
+    const player = findPlayer(this.state, playerId);
+    if (!player) throw new MatchError('NOT_FOUND', 'You are not in this match');
+
+    const hand = this.state.table?.hand;
+    if (this.state.phase !== 'HAND_IN_PROGRESS' || !hand) {
+      throw new MatchError('NOT_YOUR_TURN', 'There is no hand to look at');
+    }
+    if (hand.handNumber !== handNumber) {
+      throw new MatchError('STALE_HAND', 'That hand has ended');
+    }
+
+    const seat = hand.seats.find((s) => s.seatIndex === player.seatIndex);
+    if (!seat?.holeCards) {
+      throw new MatchError('ILLEGAL_ACTION', 'You have no cards in this hand');
+    }
+
+    const first = markPeeked(this.state.presence, player.seatIndex, handNumber, this.#clock.now());
+    // Only the first look changes what this player may be sent, and only they
+    // need telling. Later looks are already visible to the table through
+    // presence and cost nothing here.
+    if (first) this.#flush();
   }
 
   #applyAction(seatIndex: number, action: PlayerAction): void {
@@ -440,6 +509,9 @@ export class Match {
 
     this.#advanceBlindLevel();
     this.state.lastResult = null;
+    // Bodies carry over between hands; the record of having looked does not.
+    // Everybody lifts their cards again, in front of everybody, every hand.
+    resetForHand(this.state.presence, this.#clock.now());
 
     const step = startHand(this.state.table!, this.#rng);
     this.state.table = step.table;

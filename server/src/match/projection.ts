@@ -6,23 +6,36 @@ import {
   type HandView,
   type LevelView,
   type PlayerView,
+  type PresenceFrame,
   type SeatView,
   type SelfView,
 } from '@cursed/shared';
 import { legalActions } from '../poker/index.js';
 import { elapsedMs, findPlayer, type MatchState, type PlayerRecord } from './match-state.js';
+import { hasPeeked, projectPresence } from './presence.js';
 
 /**
  * The hidden-information boundary.
  *
- * THIS IS THE ONLY FUNCTION IN THE SERVER THAT MAY TURN MATCH STATE INTO
+ * THIS IS THE ONLY MODULE IN THE SERVER THAT MAY TURN MATCH STATE INTO
  * SOMETHING A CLIENT RECEIVES. If a second one ever appears, the guarantee this
  * project rests on becomes two guarantees, and then none.
  *
- * The rules it enforces:
+ * There are two exits, because the protocol carries two rates of information:
+ *
+ *   - `projectForViewer` — the situation, per viewer, on every change.
+ *   - `presenceFrame` — bodies, identical for everybody, on a fixed tick.
+ *
+ * The second one is a broadcast precisely *because* it has no viewer-specific
+ * half. Everything in a presence frame is something a person sitting at this
+ * table could see with their own eyes, which is a property the tests check by
+ * walking the frame rather than by trusting this paragraph.
+ *
+ * The rules `projectForViewer` enforces:
  *
  *   1. The deck never leaves the process, in any form, ever.
- *   2. A viewer sees their own hole cards and nobody else's.
+ *   2. A viewer sees their own hole cards, and only after they have looked at
+ *      them — see `SelfView.holeCards` for why the look is load-bearing.
  *   3. Another player's cards appear only in a showdown reveal — cards poker
  *      itself has already made public.
  *   4. Nothing about a player's stack, position or history is hidden; poker is
@@ -49,6 +62,27 @@ export function projectForViewer(match: MatchState, viewerId: string | null, now
     lastResult: match.lastResult,
     winnerPlayerId: match.winnerPlayerId,
   };
+}
+
+/**
+ * The table's bodies, as everyone sees them.
+ *
+ * No viewer argument, deliberately: presence has no hidden half, and the type
+ * system says so. Adding one would be the first step toward a second hidden-
+ * information boundary, so it should be argued for loudly if it ever happens.
+ */
+export function presenceFrame(match: MatchState, now: number): PresenceFrame {
+  const seatIndices = (match.table?.seats ?? [])
+    .filter((seat) => seat.seated)
+    .map((seat) => seat.seatIndex);
+
+  const connected = new Set(
+    match.players
+      .filter((player) => player.connected && player.eliminatedAt === null)
+      .map((player) => player.seatIndex),
+  );
+
+  return projectPresence(match.presence, { seatIndices, connected }, now);
 }
 
 function projectPlayer(hostPlayerId: string) {
@@ -139,14 +173,19 @@ function projectHand(match: MatchState): HandView | null {
 
 function projectSelf(match: MatchState, viewer: PlayerRecord | undefined): SelfView {
   if (!viewer) {
-    return { playerId: '', seatIndex: null, holeCards: null, legalActions: null };
+    return { playerId: '', seatIndex: null, holeCards: null, hasPeeked: false, legalActions: null };
   }
 
   const hand = match.table?.hand;
   const seat = hand?.seats.find((s) => s.seatIndex === viewer.seatIndex);
 
+  // Cards reach their owner only once they have lifted them. Until then the
+  // client has nothing to render and nothing to leak, which is the point: a
+  // modified client cannot skip a gesture it never received the cards without.
+  const looked = hasPeeked(match.presence, viewer.seatIndex, hand?.handNumber ?? null);
+
   // The viewer's own cards, and only ever from their own seat.
-  const holeCards: Card[] | null = seat?.holeCards ? [...seat.holeCards] : null;
+  const holeCards: Card[] | null = looked && seat?.holeCards ? [...seat.holeCards] : null;
 
   const isTheirTurn = hand !== undefined && hand !== null && hand.actingSeat === viewer.seatIndex;
 
@@ -154,6 +193,7 @@ function projectSelf(match: MatchState, viewer: PlayerRecord | undefined): SelfV
     playerId: viewer.playerId,
     seatIndex: viewer.seatIndex,
     holeCards,
+    hasPeeked: looked,
     legalActions: isTheirTurn && hand ? legalActions(hand, viewer.seatIndex) : null,
   };
 }

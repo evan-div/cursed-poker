@@ -77,6 +77,58 @@ async function look(dx, dy) {
 
 await shot('seated');
 
+/**
+ * Lifts the local player's cards, the way a player does.
+ *
+ * Right button held, pointer drawn toward them. The card should come up off the
+ * felt and tilt its face into the camera; if it does not, either the pose maths
+ * or the peek plumbing is wrong, and the screenshot says which.
+ */
+async function peek(page, pixels) {
+  await page.mouse.move(720, 500);
+  await page.mouse.down({ button: 'right' });
+  for (let i = 1; i <= 12; i++) await page.mouse.move(720, 500 + (pixels * i) / 12);
+  await page.waitForTimeout(300);
+}
+
+async function dropCards(page) {
+  await page.mouse.up({ button: 'right' });
+  await page.waitForTimeout(500);
+}
+
+// Get the head down over the cards *before* waiting for a hand. Everything
+// between the wait and the peek is a race against the action clock: this player
+// is not acting, so they will be folded out of the hand in thirty seconds, and
+// the earlier shots in this file were all of an empty felt because of it.
+await look(0, 130);
+await shot('looking-at-own-cards');
+
+// The prompt to peek exists only while this player is in a live hand and has
+// not looked yet, so it is exactly the right signal to wait on.
+await pages[0].waitForSelector('.hud-hint .hint-strong', { timeout: 90_000 });
+
+await peek(pages[0], 70);
+await shot('peek-partial');
+await peek(pages[0], 130);
+await shot('peek-full');
+
+// And what the rest of the table sees while that is happening: a lifted card
+// with nothing on it. This is the shot that matters.
+await pages[2 % PLAYERS].waitForTimeout(300);
+await pages[2 % PLAYERS].screenshot({ path: `${OUT}/peek-from-across-the-table.png` });
+
+// Numbers, because the room is dark and a body blocks its own cards. This is
+// the only honest way to ask whether the table actually saw it.
+console.log('peeker:', JSON.stringify(await pages[0].evaluate(() => window.__bodies().me)));
+console.log(
+  'as the table sees it:',
+  JSON.stringify(await pages[2 % PLAYERS].evaluate(() => window.__bodies().table)),
+);
+
+await dropCards(pages[0]);
+await shot('cards-down');
+await look(0, -130);
+
 // Measured from the seated camera, because that is the one players use. The
 // free-look positions below see the whole room at once and flatter nothing.
 const budget = await pages[0].evaluate(async () => {

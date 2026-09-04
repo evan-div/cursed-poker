@@ -80,22 +80,39 @@ animates yet (Phase 6).
 
 ---
 
-## Phase 4 — Physical interactions
+## Phase 4 — Physical interactions ✅ complete
 
-- [ ] Revisit pointer lock for free-look, now that the action bar exists
-- [ ] Progressive analog card peek (hold + move; exposure tracks input)
-- [ ] Owner-only card faces; abstracted peek pose replicated to opponents
-- [ ] Gaze direction as replicated input
-- [ ] Visible card-check behaviour on other avatars
-- [ ] Betting and chip interactions
-- [ ] Camera attention bias — soft pull toward the acting player, instantly
-      overridden by any deliberate look
+- [x] Pointer lock revisited: offered on click, released on Escape, drag-look
+      still works unlocked, and every action has a key so a locked player never
+      has to leave the room to bet
+- [x] Progressive analog card peek — hold right-click or `V`, pull toward you;
+      exposure tracks input continuously and a released card falls
+- [x] **Hole cards arrive when you look at them**, not at the deal. The gesture
+      is load-bearing rather than decorative, and a client that never peeks never
+      receives the cards
+- [x] Owner-only card faces; the peek *pose* replicated, never the card
+- [x] Gaze as a replicated input — a subject (`seat 4`, `own cards`, `the pot`),
+      not a vector, so tell-reading stays a human skill
+- [x] `presence` as a second server channel at 12 Hz, with no per-viewer half
+- [x] Silence replicated as stillness: not reporting is not a way to hide
+- [x] Avatars turn their heads toward what their owner is looking at, and lean
+      over their cards as they lift them
+- [x] Camera attention bias — a soft pull toward the acting player, a raise, a
+      showdown; instantly and completely surrendered to any deliberate look
+- [x] Betting: keyboard bindings, wheel sizing, and "hands on chips" replicated
+      as a tell without ever replicating the amount
+- [x] The Phase 3 HUD card readout removed — the cards are on the table now
+
+**70 new tests** (255 total), and a `__bodies()` dev hook, because two of this
+phase's three real bugs were invisible in a screenshot.
 
 ---
 
 ## Phase 5 — The Dealer and atmosphere
 
 - [ ] Dealer model: tall, hooded, face lost in black, two dim red eyes
+- [ ] Lighting that lets a lifted card be read without flattening the room —
+      the current lamp leaves a steeply tilted card in its own shadow
 - [ ] Deal / watch / lean / rise animation set
 - [ ] Independent head tracking; unnatural stillness; occasional twitch
 - [ ] Lighting pass; positional audio foundation
@@ -106,6 +123,7 @@ animates yet (Phase 6).
 ## Phase 6 — Heart rate and tells
 
 - [ ] Server-side stress model with named stress events
+- [ ] Feed tremor into `PeekGesture`'s `unsteadiness`, which is wired and inert
 - [ ] First-person feedback: heartbeat, breathing, tremor, camera instability,
       tunnel vision, unsteady peeking
 - [ ] Server-derived third-person tell state (`tremor`, `breathing`, `sweat`, …)
@@ -172,7 +190,7 @@ animates yet (Phase 6).
 
 ```bash
 npm install
-npm test              # 156 tests
+npm test              # 255 tests
 npm run typecheck
 npm run sim           # whole-match fuzzing only
 ```
@@ -188,3 +206,15 @@ Open <http://localhost:5173> in four to six tabs or browsers. One creates a
 lobby, the rest join with the code, everyone readies up, the host begins. Set
 `SESSION_SECRET` to keep reconnect tokens working across a server restart. See
 the README for what to check if the UI shows `offline`.
+
+At the table:
+
+| | |
+|---|---|
+| Look around | drag, or click the table for pointer lock (Escape releases) |
+| **Look at your cards** | hold right-click or `V`, then pull the mouse toward you |
+| Act | `F` fold · `C` check/call · `R` raise · `A` all in, or click |
+| Size a bet | the slider, or the mouse wheel over it |
+
+You will not see your own cards until you lift them, and everyone else can see
+you do it.

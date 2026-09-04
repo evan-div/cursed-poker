@@ -63,18 +63,32 @@ const FAST_STRUCTURE: BlindStructure = {
 
 const fast = process.env.DEV_FAST === '1';
 
+/**
+ * How long a player has to act, overridable.
+ *
+ * Thirty seconds is right for people. It is far too short for a tool that drives
+ * browsers around the table taking screenshots — `npm run shots` spends most of
+ * a hand just setting the lobby up, and every capture landed on an empty felt
+ * because the player it was photographing had been folded out by the clock.
+ */
+const actionTimeoutMs = Number(process.env.ACTION_TIMEOUT_MS ?? 0);
+
+// Merged rather than spread twice: two `timings` keys in one object literal
+// means the second one wins outright, quietly undoing DEV_FAST's other clocks.
+const timings = {
+  ...(fast ? { actionTimeoutMs: 8_000, showdownDisplayMs: 2_500, betweenHandsMs: 1_200 } : {}),
+  ...(actionTimeoutMs > 0 ? { actionTimeoutMs } : {}),
+};
+
 const gameServer = new GameServer({
   transport: new SocketIoTransport(io),
   ...(process.env.SESSION_SECRET ? { sessionSecret: process.env.SESSION_SECRET } : {}),
-  ...(fast
-    ? {
-        structure: FAST_STRUCTURE,
-        timings: { actionTimeoutMs: 8_000, showdownDisplayMs: 2_500, betweenHandsMs: 1_200 },
-      }
-    : {}),
+  ...(fast ? { structure: FAST_STRUCTURE } : {}),
+  ...(Object.keys(timings).length > 0 ? { timings } : {}),
 });
 
 if (fast) console.log('[cursed-poker] DEV_FAST: three big blinds each, short clocks');
+if (actionTimeoutMs > 0) console.log(`[cursed-poker] action clock overridden to ${actionTimeoutMs}ms`);
 
 if (!process.env.SESSION_SECRET) {
   console.warn(

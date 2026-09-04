@@ -1,7 +1,17 @@
 import { BoxGeometry, CylinderGeometry, Group, Mesh, Vector3 } from 'three';
+import { GAZE_AWAY, type GazeTarget } from '@cursed/shared';
 import { MATERIALS } from './materials.js';
-import { RADIUS, TABLE, facingCentreYaw, seatStation, stationPoint } from './layout.js';
+import {
+  LOOK_LIMITS,
+  RADIUS,
+  TABLE,
+  clamp,
+  facingCentreYaw,
+  seatStation,
+  stationPoint,
+} from './layout.js';
 import { buildHand, jointTowards, segment, type HandParts } from './body.js';
+import { gazePoint } from './gaze.js';
 
 /**
  * A person at the table.
@@ -13,6 +23,13 @@ import { buildHand, jointTowards, segment, type HandParts } from './body.js';
  * because every later phase hangs something off one of those parts.
  *
  * The local player's own head is hidden. You are inside it.
+ *
+ * Phase 4 gives the body two things to do, and both of them are *information*.
+ * The head turns toward whatever its owner is looking at, and the torso leans in
+ * as they lift their cards. Neither is decoration: an opponent who wants to know
+ * whether you just re-checked your hand after that third heart landed has to be
+ * watching you when you do it. Nothing here is ever announced, logged or
+ * highlighted — if you were not looking, you missed it.
  */
 
 const CLOTH = [MATERIALS.cloth, MATERIALS.clothAlt, MATERIALS.clothThird];
@@ -23,6 +40,16 @@ export class Avatar {
 
   #head: Group;
   #body: Group;
+  #torso: Mesh;
+  #torsoRestX: number;
+
+  #gaze: GazeTarget = GAZE_AWAY;
+  #headYaw = 0;
+  #headPitch = 0;
+  #targetHeadYaw = 0;
+  #targetHeadPitch = 0;
+  #peek = 0;
+  #lean = 0;
 
   constructor(readonly seatIndex: number) {
     const station = seatStation(seatIndex);
@@ -53,6 +80,8 @@ export class Avatar {
     shoulders.position.set(0, 1.0, 0.0);
     shoulders.castShadow = true;
 
+    this.#torso = torso;
+    this.#torsoRestX = torso.rotation.x;
     this.#body.add(hips, torso, shoulders, this.#buildArm(-1, cloth), this.#buildArm(1, cloth));
 
     const neck = new Mesh(new CylinderGeometry(0.048, 0.055, 0.09, 8), MATERIALS.skin);
@@ -70,6 +99,74 @@ export class Avatar {
 
   setPresent(present: boolean): void {
     this.group.visible = present;
+  }
+
+  /**
+   * Points this body at whatever its owner is looking at.
+   *
+   * The target arrives as a *subject* rather than an angle — see `presence.ts`
+   * for why — so the head is aimed at wherever that subject happens to be. A
+   * player who has gone quiet keeps looking wherever they last looked, which is
+   * its own kind of unsettling, and is exactly what the server replicated.
+   */
+  setGaze(target: GazeTarget): void {
+    this.#gaze = target;
+    const at = gazePoint(target, this.seatIndex);
+    if (!at) {
+      // Looking at nothing: eyes down and slightly aside, the way a person waits.
+      this.#targetHeadYaw = 0.22;
+      this.#targetHeadPitch = -0.3;
+      return;
+    }
+
+    const head = this.#headWorldPosition();
+    const dx = at.x - head.x;
+    const dz = at.z - head.z;
+    const dy = at.y - head.y;
+
+    // A body's forward is its own +Z, the opposite convention to a camera's.
+    const worldYaw = Math.atan2(dx, dz);
+    this.#targetHeadYaw = clamp(
+      wrapAngle(worldYaw - this.group.rotation.y),
+      -LOOK_LIMITS.yaw,
+      LOOK_LIMITS.yaw,
+    );
+    this.#targetHeadPitch = clamp(
+      Math.atan2(dy, Math.hypot(dx, dz)),
+      LOOK_LIMITS.pitchDown,
+      LOOK_LIMITS.pitchUp,
+    );
+  }
+
+  get gaze(): GazeTarget {
+    return this.#gaze;
+  }
+
+  /** How far this player has their cards up, 0..1. Drives the lean, not the cards. */
+  setPeek(exposure: number): void {
+    this.#peek = clamp(exposure, 0, 1);
+  }
+
+  /** Eases the body toward where it is trying to be. Call once per frame. */
+  update(delta: number): void {
+    const ease = 1 - Math.exp(-9 * delta);
+    this.#headYaw += (this.#targetHeadYaw - this.#headYaw) * ease;
+    this.#headPitch += (this.#targetHeadPitch - this.#headPitch) * ease;
+
+    this.#head.rotation.order = 'YXZ';
+    this.#head.rotation.y = this.#headYaw;
+    this.#head.rotation.x = this.#headPitch;
+
+    // Leaning over your own cards. Small — the tell is that it happens at all,
+    // and when, not how far somebody bent.
+    this.#lean += (this.#peek - this.#lean) * (1 - Math.exp(-7 * delta));
+    this.#torso.rotation.x = this.#torsoRestX - this.#lean * 0.11;
+  }
+
+  #headWorldPosition(): { x: number; y: number; z: number } {
+    const station = seatStation(this.seatIndex);
+    const at = stationPoint(station, RADIUS.body, 0);
+    return { x: at.x, y: 1.21, z: at.z };
   }
 
   /**
@@ -126,4 +223,9 @@ export class Avatar {
     this.hands.push(hand);
     return upper.joint;
   }
+}
+
+/** Brings an angle back into -PI..PI, so a head turns the short way round. */
+function wrapAngle(angle: number): number {
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
 }
