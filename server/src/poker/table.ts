@@ -7,7 +7,8 @@ import {
   type PlayerAction,
 } from '@cursed/shared';
 import { applyAction, createHand } from './hand-engine.js';
-import type { HandEvent, HandSeatInput, HandState } from './hand-state.js';
+import type { HandEvent } from '@cursed/shared';
+import type { HandSeatInput, HandState } from './hand-state.js';
 import { CryptoRandomSource, type RandomSource } from './random.js';
 
 /**

@@ -1,7 +1,7 @@
 # Horror Texas Hold'em — Architecture
 
-Status: living document. Phase 1 (poker engine) is implemented; everything from
-Phase 2 on is design intent, not code.
+Status: living document. Phases 1 (poker engine) and 2 (online private lobbies)
+are implemented; everything from Phase 3 on is design intent, not code.
 
 ---
 
@@ -63,12 +63,19 @@ engine reads them.
 | `poker/hand-engine.ts` | One hand of No-Limit Hold'em as a pure state machine |
 | `poker/table.ts` | Seats, stacks, button rotation, blind level, the between-hands seam |
 | `poker/orbit.ts` | First-orbit tracking (button bookkeeping only) |
+| `match/match.ts` | The outer state machine: one lobby, empty room to last player standing |
+| `match/projection.ts` | **The hidden-information boundary.** The only path from state to bytes |
+| `match/clock.ts` | Time, injected, so every timeout is testable |
+| `net/transport.ts` | The transport seam; `net/socketio-transport.ts` is the only file that names Socket.IO |
+| `net/sessions.ts` | HMAC-signed, room-bound, expiring reconnect tokens |
+| `net/rooms.ts` | Lobby lifecycle and invite codes |
+| `net/rate-limit.ts` | Token buckets for message flooding and code guessing |
+| `net/game-server.ts` | Wires it together; validates every inbound payload |
 
 ### Module map (planned)
 
-Server: `projection.ts` (the hidden-information boundary), `MatchController`,
-`RoomManager`, `SessionManager`, `SacrificeManager`, `PerkManager`,
-`StressModel`, `TellDeriver`, `HorrorDirector`.
+Server: `SacrificeManager`, `PerkManager`, `StressModel`, `TellDeriver`,
+`HorrorDirector`.
 
 Client: `GameScene`, `TableScene`, `CameraController` (attention bias),
 `CardPeekController`, `InteractionManager`, `AvatarRig`, `DealerController`,
@@ -186,18 +193,32 @@ the peeked card is not. Opponents receive "seat 3 is looking at their cards,
 
 ### The projection boundary
 
-One module — `server/projection.ts` — converts authoritative match state into a
-per-viewer view. **Nothing else may serialize match state toward a client.**
+One module — `server/src/match/projection.ts` — converts authoritative match
+state into a per-viewer view. **Nothing else may serialize match state toward a
+client.**
 
 ```
-projectForViewer(match: MatchState, viewerId: PlayerId): ClientView
+projectForViewer(match: MatchState, viewerId: string | null, now: number): ClientView
 ```
 
-Its test suite asserts, over fuzzed states and every viewer, that the serialized
-output contains no card the viewer is not entitled to see and no deck data at
-all. `tests/match-simulation.test.ts` already enforces the engine half of this:
-the event stream carries no deck, no burn pile, and no hole card belonging to a
-player who was not required to show.
+It is tested three ways, deliberately overlapping:
+
+1. **Structurally, over live fuzzed matches.** `projection.test.ts` walks every
+   viewer's view at every decision point of complete matches, collects every
+   numeric array in the object tree, and asserts each one is either seat indices
+   or cards that viewer is entitled to. An unclassified numeric array is a
+   failure, so a newly added card-bearing field cannot slip through unnoticed.
+2. **Mutation-checked.** Deliberately changing the projector to expose live hole
+   cards makes four of the six tests fail with the exact path of the leak. A
+   security test that cannot fail is worthless, so this was verified.
+3. **End-to-end, across clients.** `tests/integration.test.ts` records every view
+   every real Socket.IO client receives during a whole match, then cross-
+   references them: no client may ever have been sent a card that another client
+   was holding at that moment, unless that seat was openly revealed.
+
+`tests/match-simulation.test.ts` covers the engine half: the event stream carries
+no deck, no burn pile, and no hole card belonging to a player who was not
+required to show.
 
 ---
 
@@ -439,17 +460,13 @@ is not evidence.
 
 ## 12. Decisions needed soon
 
-| Decision | Needed by | Recommendation |
+| Decision | Needed by | Status |
 |---|---|---|
-| Networking library | Phase 2 | Socket.IO behind a `Transport` interface (§4) |
-| Disconnect policy during a hand | Phase 2 | Auto-check/fold after a timeout; seat and sacrifices preserved; reconnect restores the same hole cards |
-| Session token scheme | Phase 2 | Signed, unguessable, room-bound |
-| Tells derived server-side or client-side | Phase 2 protocol, Phase 6 use | **Server-side.** It shapes the message schema, so decide before the protocol is written |
-| What an eliminated player sees | Phase 10, but affects protocol now | Public projection only |
-| Does the blind clock pause for rituals | Phase 8 | Yes |
-| Hand/finger rig approach | Phase 3, before modelling | Per-finger visibility + procedural grips |
-| Dead-button rule | Now — **decided** | Simple forward-moving button (§13) |
-| Chip granularity | Now — **decided** | Integers only; the engine rejects fractional bets |
+| Tells derived server-side or client-side | Phase 6 | **Server-side**, and the protocol is already shaped for it: the client sends inputs, the server sends derived state |
+| What an eliminated player sees | Phase 10 | Public projection only. Already true — an eliminated player's view is built by the same function as everyone else's |
+| Hand/finger rig approach | Phase 3, before modelling | Open. Recommendation: per-finger visibility + procedural grips |
+| Does the blind clock pause for rituals | Phase 8 | Open. Recommendation: yes. `MatchState` already splits the clock into accumulated and running so pausing is a two-line change |
+| View deltas instead of whole views | When profiling says so | Open, and deliberately deferred (§14) |
 
 ---
 
@@ -489,3 +506,54 @@ half-applied hand behind.
 **Chip conservation is asserted in production**, not only in tests. Silently
 losing a chip would be experienced by players as the game cheating, which is the
 one unacceptable failure mode.
+
+---
+
+## 14. Decisions made in Phase 2
+
+**Whole views, not deltas.** Every state change sends each player a complete
+`ClientView`. A view is a few kilobytes and a poker table produces roughly one
+message per action, so delta encoding would optimise a problem that does not
+exist while introducing an entire class of desync bugs. Narration arrives
+separately as an event stream, which is for animation and the log and is never a
+source of truth: if the events and the view disagree, the view is right.
+
+**Time is injected.** Everything that waits — action clocks, showdown display,
+blind levels, reconnect grace — goes through a `Clock` interface. Tests drive a
+manual clock, so a 90-minute match with timeouts runs in milliseconds and no test
+sleeps.
+
+**The disconnect policy.** A player who drops keeps their seat, their chips and
+their cards; only their clock changes. They get a shortened action timer, but
+only while somebody else is still connected — a table that has entirely dropped
+out gets the full clock rather than auto-folding its way through the match. A
+timeout checks when checking is free and folds only when it must, so a lost
+connection never costs a hand it did not have to.
+
+**Actions carry a hand number.** `poker:action` names the hand it was decided in
+and is rejected if that hand has ended. Without it, a laggy client can fold a
+hand that is already over and have the fold land on the next one.
+
+**Session tokens.** HMAC-SHA256 over a payload carrying player, room and issue
+time, compared in constant time, expiring after twelve hours. Player ids are
+random, never derived from a name or a seat. Whoever holds the token holds that
+seat's hole cards, so nothing about it is guessable.
+
+**Two rate limits, for two different attacks.** Per connection (20 messages a
+second, burst 40) against flooding; per address (12 a minute) on lobby
+create/join, because that is the code-guessing surface. Without the second, 887
+million lobby codes fall quickly and a private lobby is only private by
+obscurity.
+
+**Lobby codes read aloud.** Six characters from a 31-character alphabet with no
+`0`/`O` and no `1`/`I`/`L`, drawn from the CSPRNG.
+
+**The blind level shown is the level in play.** The view reports the level the
+current hand is actually being played at, taken from the table, not the level the
+wall clock has reached. A countdown that has run past zero means the blinds go up
+when the next hand is dealt. Showing a player 200/400 while they post 50/100
+would be a lie, and the first version did exactly that until a test caught it.
+
+**Rooms live in memory.** A match is one 60-90 minute session between friends and
+there is nothing worth persisting across a restart yet. `MatchState` is plain
+JSON on purpose, so snapshotting is a small change when that stops being true.

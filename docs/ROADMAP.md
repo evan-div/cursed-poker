@@ -29,32 +29,38 @@ of the phase that needs it.
 
 ---
 
-## Phase 2 — Online private lobby
+## Phase 2 — Online private lobby ✅ complete
 
-The goal is a **complete, playable poker game through a plain developer UI**
-before any Three.js work begins.
+The goal was a **complete, playable poker game through a plain developer UI**
+before any Three.js work began.
 
-- [ ] `/shared/messages.ts` — client↔server message schema + runtime validation
-- [ ] `Transport` interface; Socket.IO implementation behind it
-- [ ] `RoomManager` — private lobbies, invite codes with real entropy, join rate limiting
-- [ ] `SessionManager` — signed, room-bound, unguessable session tokens
-- [ ] `MatchController` — the outer state machine; owns the clock and the loop
-- [ ] **`projection.ts` — the single hidden-information boundary** (+ its own test suite)
-- [ ] Seat assignment, ready-up, match start at 4-6 players
-- [ ] Reconnect: resume the same seat, restore the same hole cards
-- [ ] Disconnect policy: auto-check/fold on timeout, seat preserved
-- [ ] Per-socket action rate limiting
-- [ ] Minimal HTML dev UI: stacks, board, pot, action buttons, log
-- [ ] Integration test: a full 6-player match driven through the real transport
+- [x] `shared/messages.ts` — message schemas with runtime (zod) validation
+- [x] `Transport` interface; Socket.IO implementation behind it
+- [x] `RoomManager` — private lobbies, CSPRNG invite codes, join rate limiting
+- [x] `SessionManager` — HMAC-signed, room-bound, expiring session tokens
+- [x] `Match` — the outer state machine; owns the loop, the clocks and the timeouts
+- [x] **`projection.ts` — the single hidden-information boundary**, with a test
+      suite that is itself mutation-checked against a deliberate leak
+- [x] Seat assignment, ready-up, host start at 4-6 players
+- [x] Reconnect: same seat, same chips, same hole cards
+- [x] Disconnect policy: shortened clock, auto-check/fold, seat preserved
+- [x] Per-connection and per-address rate limiting
+- [x] Dev UI: seats, board, pot, blind clock, hole cards, action bar, event log
+- [x] Integration tests: whole matches driven through the real transport
 
-**Exit criteria:** six people in different browsers finish a whole tournament,
-disconnect and rejoin mid-match, and nobody can see anyone else's cards.
+**Exit criteria met.** Verified two ways: an automated 6-player match over real
+Socket.IO, and four live Chromium browsers playing five hands through the dev
+UI — creating a lobby, joining by code, readying up, acting, and surviving a
+full page reload mid-match with the same seat and the same cards.
+
+**55 new tests** (156 total).
 
 ---
 
 ## Phase 3 — The 3D table
 
-- [ ] Scene bootstrap: Vite + Three.js client, shared types wired in
+- [x] Vite client workspace with shared types wired in (done in Phase 2)
+- [ ] Three.js scene bootstrap replacing the dev UI
 - [ ] Poker table, six seats, room shell
 - [ ] Placeholder human avatars (head, torso, arms, hands with individual fingers)
 - [ ] Placeholder Dealer volume
@@ -157,7 +163,18 @@ disconnect and rejoin mid-match, and nobody can see anyone else's cards.
 
 ```bash
 npm install
-npm test          # 101 tests
+npm test              # 156 tests
 npm run typecheck
-npm run sim       # whole-match fuzzing only
+npm run sim           # whole-match fuzzing only
 ```
+
+To actually play:
+
+```bash
+npm run dev:server    # authoritative server on :3001
+npm run dev:client    # dev UI on :5173
+```
+
+Open :5173 in four to six tabs or browsers. One creates a lobby, the rest join
+with the code, everyone readies up, the host begins. Set `SESSION_SECRET` to
+keep reconnect tokens working across a server restart.

@@ -6,7 +6,8 @@
 import { cardsFromString, orderedDeck, type Card, type PlayerAction } from '@cursed/shared';
 import { stackedDeck, type SecretDeck } from './deck.js';
 import { applyAction, createHand, legalActions, type CreateHandOptions } from './hand-engine.js';
-import type { HandEvent, HandSeatInput, HandState } from './hand-state.js';
+import type { HandEvent } from '@cursed/shared';
+import type { HandSeatInput, HandState } from './hand-state.js';
 
 /** Occupied seats in clockwise order starting after the button — the deal order. */
 export function dealOrder(seats: readonly number[], buttonSeat: number, seatCount: number) {

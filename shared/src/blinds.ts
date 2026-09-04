@@ -109,6 +109,17 @@ export function levelIndexForElapsed(structure: BlindStructure, elapsedSeconds: 
   return structure.levels.length - 1;
 }
 
+/**
+ * Elapsed seconds at which the level with this index ends, or null for the last
+ * level (which runs forever so a long match cannot fall off the end of the data).
+ */
+export function elapsedAtEndOfLevel(structure: BlindStructure, index: number): number | null {
+  if (index >= structure.levels.length - 1) return null;
+  let total = 0;
+  for (let i = 0; i <= index; i++) total += structure.levels[i]!.durationSeconds;
+  return total;
+}
+
 export function levelAt(structure: BlindStructure, index: number): BlindLevel {
   const clamped = Math.min(Math.max(index, 0), structure.levels.length - 1);
   const level = structure.levels[clamped];

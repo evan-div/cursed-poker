@@ -20,27 +20,47 @@ hands**, through one function.
 
 ## Status
 
-**Phase 1 complete — the poker engine.** No-Limit Hold'em for 4-6 players with
-side pots, split pots, correct raise-reopening rules, big-blind antes, button
-rotation and blind progression. 101 tests, including 140 fuzzed whole matches and
-a shuffle fairness suite.
+**Phases 1 and 2 complete — the game is playable online.**
 
-Nothing is networked or rendered yet, by design — see [docs/ROADMAP.md](docs/ROADMAP.md).
+- **The poker engine.** No-Limit Hold'em for 4-6 players: side pots, split pots,
+  correct raise-reopening rules, big-blind antes, button rotation, blind
+  progression. Pure, browser-free and framework-free.
+- **Private lobbies over the wire.** Authoritative server, invite codes,
+  reconnect that restores your seat and your cards, disconnect handling, rate
+  limiting, and a plain developer UI you can finish a whole tournament in.
+
+156 tests, including 140 fuzzed whole matches, a shuffle fairness suite, and a
+hidden-information suite that audits every player's view at every decision point.
+
+Nothing is rendered in 3D yet, by design — see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Layout
 
 ```
-shared/   card encoding, poker vocabulary, blind structures, tuning constants
+shared/   card encoding, poker vocabulary, blind data, wire protocol, view types
 server/   authoritative simulation
   poker/  the engine — no I/O, no framework, no horror
-tests/    whole-match fuzzing, shuffle fairness
+  match/  the outer state machine and the projection boundary
+  net/    transport, sessions, rooms, rate limiting
+client/   developer UI (Three.js replaces it in Phase 3)
+tests/    whole-match fuzzing, shuffle fairness, end-to-end integration
 docs/     architecture and roadmap
 ```
+
+## Playing it
+
+```bash
+npm install
+npm run dev:server    # authoritative server on :3001
+npm run dev:client    # dev UI on :5173
+```
+
+Open :5173 in four to six tabs. One player creates a lobby, the others join with
+the code, everyone readies up, the host begins.
 
 ## Commands
 
 ```bash
-npm install
 npm test          # full suite
 npm run typecheck
 npm run sim       # whole-match fuzzing only

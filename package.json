@@ -6,7 +6,8 @@
   "type": "module",
   "workspaces": [
     "shared",
-    "server"
+    "server",
+    "client"
   ],
   "engines": {
     "node": ">=22"
@@ -15,11 +16,19 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b tsconfig.json",
-    "sim": "vitest run tests/match-simulation.test.ts"
+    "sim": "vitest run tests/match-simulation.test.ts",
+    "dev:server": "npm --workspace @cursed/server run dev",
+    "dev:client": "npm --workspace @cursed/client run dev"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "tsx": "^4.23.13",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "zod": "^3.25.76"
   }
 }

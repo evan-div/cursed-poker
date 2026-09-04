@@ -8,5 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./*": "./src/*"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
   }
 }
