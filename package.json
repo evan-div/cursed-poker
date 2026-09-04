@@ -2,7 +2,7 @@
   "name": "cursed-poker",
   "private": true,
   "version": "0.0.0",
-  "description": "Horror Texas Hold'em \u2014 last-man-standing supernatural poker for 4-6 players.",
+  "description": "Horror Texas Hold'em — last-man-standing supernatural poker for 4-6 players.",
   "type": "module",
   "workspaces": [
     "shared",
