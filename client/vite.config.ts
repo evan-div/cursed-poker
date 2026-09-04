@@ -9,5 +9,8 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Fail loudly rather than sliding to 5174, which the server's CORS origin
+    // would not match — the page would load and then silently never connect.
+    strictPort: true,
   },
 });

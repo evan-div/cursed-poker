@@ -51,12 +51,41 @@ docs/     architecture and roadmap
 
 ```bash
 npm install
+npm run dev
+```
+
+That starts both the server (:3001) and the dev UI (:5173) together, labels their
+output, and stops both on Ctrl-C. Open <http://localhost:5173> in four to six
+tabs — one player creates a lobby, the others join with the code, everyone
+readies up, the host begins.
+
+To run them in separate terminals instead:
+
+```bash
 npm run dev:server    # authoritative server on :3001
 npm run dev:client    # dev UI on :5173
 ```
 
-Open :5173 in four to six tabs. One player creates a lobby, the others join with
-the code, everyone readies up, the host begins.
+Both are long-running, so each needs its own terminal — the server prints
+`listening on :3001` and then stays in the foreground. That is success, not a
+hang.
+
+### If it does not connect
+
+The UI says `offline` in the top right when the socket cannot reach the server.
+
+- **Something else is on :5173 or :3001.** The dev UI now refuses to start on a
+  different port rather than silently sliding to :5174 and failing to connect.
+  Free the port (`lsof -ti:5173 | xargs kill`) or set `PORT` for the server and
+  `VITE_SERVER_URL` for the client to match.
+- **A stale server from a previous run.** `lsof -ti:3001 | xargs kill`.
+- **Reconnect tokens stop working after a restart.** Expected: without
+  `SESSION_SECRET` the server generates a random one at boot. Set it to keep
+  sessions across restarts.
+
+`CLIENT_ORIGIN` restricts which browser origin may connect. Leave it unset in
+development and any `localhost` origin is accepted; set it in production and only
+that origin is.
 
 ## Commands
 

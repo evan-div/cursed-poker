@@ -11,7 +11,24 @@ import { SocketIoTransport } from './net/socketio-transport.js';
  */
 
 const PORT = Number(process.env.PORT ?? 3001);
-const ORIGIN = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
+
+/**
+ * With `CLIENT_ORIGIN` set, that origin and nothing else. Without it we are in
+ * development, where the dev UI may legitimately be on a different port, so any
+ * loopback origin is allowed. Getting this wrong is quiet and confusing: the
+ * page loads, the socket is refused, and the only symptom is "offline".
+ */
+const EXPLICIT_ORIGIN = process.env.CLIENT_ORIGIN;
+const LOOPBACK = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+
+const corsOrigin = (
+  origin: string | undefined,
+  callback: (error: Error | null, allowed?: boolean) => void,
+): void => {
+  if (!origin) return callback(null, true); // same-origin or a non-browser client
+  if (EXPLICIT_ORIGIN) return callback(null, origin === EXPLICIT_ORIGIN);
+  callback(null, LOOPBACK.test(origin));
+};
 
 const httpServer = createServer((req, res) => {
   if (req.url === '/health') {
@@ -23,7 +40,7 @@ const httpServer = createServer((req, res) => {
 });
 
 const io = new SocketIoServer(httpServer, {
-  cors: { origin: ORIGIN, credentials: true },
+  cors: { origin: corsOrigin, credentials: true },
   // A poker action is tiny. Anything larger is not a poker action.
   maxHttpBufferSize: 8 * 1024,
 });
@@ -44,7 +61,11 @@ const sweeper = setInterval(() => gameServer.sweep(), 60_000);
 sweeper.unref();
 
 httpServer.listen(PORT, () => {
-  console.log(`[cursed-poker] listening on :${PORT} (client origin ${ORIGIN})`);
+  console.log(
+    `[cursed-poker] listening on :${PORT} ` +
+      `(accepting ${EXPLICIT_ORIGIN ?? 'any localhost origin'})`,
+  );
+  console.log('[cursed-poker] open the dev UI at http://localhost:5173');
 });
 
 const shutdown = async () => {

@@ -171,10 +171,10 @@ npm run sim           # whole-match fuzzing only
 To actually play:
 
 ```bash
-npm run dev:server    # authoritative server on :3001
-npm run dev:client    # dev UI on :5173
+npm run dev           # server on :3001 and dev UI on :5173, together
 ```
 
-Open :5173 in four to six tabs or browsers. One creates a lobby, the rest join
-with the code, everyone readies up, the host begins. Set `SESSION_SECRET` to
-keep reconnect tokens working across a server restart.
+Open <http://localhost:5173> in four to six tabs or browsers. One creates a
+lobby, the rest join with the code, everyone readies up, the host begins. Set
+`SESSION_SECRET` to keep reconnect tokens working across a server restart. See
+the README for what to check if the UI shows `offline`.
