@@ -42,7 +42,9 @@ server/   authoritative simulation
   poker/  the engine — no I/O, no framework, no horror
   match/  the outer state machine and the projection boundary
   net/    transport, sessions, rooms, rate limiting
-client/   developer UI (Three.js replaces it in Phase 3)
+client/   the table
+  scene/  Three.js: layout, table, avatars, Dealer, cards, chips, camera
+  ui/     DOM overlay: lobby, HUD, nameplates
 tests/    whole-match fuzzing, shuffle fairness, end-to-end integration
 docs/     architecture and roadmap
 ```
@@ -93,6 +95,7 @@ that origin is.
 npm test          # full suite
 npm run typecheck
 npm run sim       # whole-match fuzzing only
+npm run shots     # drive real browsers around the table and screenshot it
 ```
 
 ## Documents

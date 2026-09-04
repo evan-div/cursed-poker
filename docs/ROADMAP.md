@@ -57,23 +57,32 @@ full page reload mid-match with the same seat and the same cards.
 
 ---
 
-## Phase 3 — The 3D table
+## Phase 3 — The 3D table ✅ complete
 
 - [x] Vite client workspace with shared types wired in (done in Phase 2)
-- [ ] Three.js scene bootstrap replacing the dev UI
-- [ ] Poker table, six seats, room shell
-- [ ] Placeholder human avatars (head, torso, arms, hands with individual fingers)
-- [ ] Placeholder Dealer volume
-- [ ] Card and chip rendering; community card area; pot display
-- [ ] Seated first-person camera with free-look
-- [ ] Empty-chair state for departed players
-- [ ] **Performance budget established here**: draw calls, shadow-casting lights,
-      shared skeleton/mesh strategy for six animated humanoids
+- [x] Three.js scene replacing the dev UI; DOM kept for the lobby and HUD
+- [x] Round table of seven stations, chairs, room shell, lighting
+- [x] Placeholder human avatars: head, torso, arms, hands, **five separate fingers each**
+- [x] Placeholder Dealer — hooded, taller than everyone, two red eyes, long hands
+- [x] Cards from a runtime-generated atlas; chips as one instanced mesh; pot
+- [x] Seated first-person camera with clamped free-look and a resting gaze
+- [x] Empty-chair state for eliminated players
+- [x] Nameplates projected from world space into the DOM overlay
+- [x] **Performance budget established**: 173 draw calls and 8.3k triangles at
+      six players, growing ~21 draw calls per seat (see ARCHITECTURE §15)
+- [x] `npm run shots` — drives real browsers around the table and screenshots it
+
+Deliberately left for later: lighting is a readable placeholder, not the
+oppressive room the brief describes (Phase 5), faces are featureless, and nothing
+animates yet (Phase 6).
+
+**29 new tests** (185 total).
 
 ---
 
 ## Phase 4 — Physical interactions
 
+- [ ] Revisit pointer lock for free-look, now that the action bar exists
 - [ ] Progressive analog card peek (hold + move; exposure tracks input)
 - [ ] Owner-only card faces; abstracted peek pose replicated to opponents
 - [ ] Gaze direction as replicated input
@@ -171,7 +180,8 @@ npm run sim           # whole-match fuzzing only
 To actually play:
 
 ```bash
-npm run dev           # server on :3001 and dev UI on :5173, together
+npm run dev           # server on :3001 and table on :5173, together
+npm run dev:fast      # short stacks and quick clocks, for reaching eliminations
 ```
 
 Open <http://localhost:5173> in four to six tabs or browsers. One creates a

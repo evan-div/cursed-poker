@@ -1,7 +1,8 @@
 # Horror Texas Hold'em — Architecture
 
-Status: living document. Phases 1 (poker engine) and 2 (online private lobbies)
-are implemented; everything from Phase 3 on is design intent, not code.
+Status: living document. Phases 1 (poker engine), 2 (online private lobbies) and
+3 (the 3D table) are implemented; everything from Phase 4 on is design intent,
+not code.
 
 ---
 
@@ -71,14 +72,22 @@ engine reads them.
 | `net/rooms.ts` | Lobby lifecycle and invite codes |
 | `net/rate-limit.ts` | Token buckets for message flooding and code guessing |
 | `net/game-server.ts` | Wires it together; validates every inbound payload |
+| `client/scene/layout.ts` | Every position on the table, as pure maths |
+| `client/scene/game-scene.ts` | The renderer; a pure function of `ClientView` |
+| `client/scene/table.ts` | Room, table, chairs, lighting |
+| `client/scene/avatar.ts` | A seated person, with five separate fingers per hand |
+| `client/scene/dealer.ts` | The hooded figure at the seventh station |
+| `client/scene/cards.ts` | Card meshes, and the client's one privacy decision |
+| `client/scene/chips.ts` | Every chip on the table, in one draw call |
+| `client/scene/seated-camera.ts` | A head on a neck, clamped to what a chair allows |
+| `client/ui/*` | The DOM overlay: lobby, HUD, projected nameplates |
 
 ### Module map (planned)
 
 Server: `SacrificeManager`, `PerkManager`, `StressModel`, `TellDeriver`,
 `HorrorDirector`.
 
-Client: `GameScene`, `TableScene`, `CameraController` (attention bias),
-`CardPeekController`, `InteractionManager`, `AvatarRig`, `DealerController`,
+Client: `CardPeekController`, `InteractionManager`, attention bias in the camera,
 `TellVisualizer`, `AudioManager`, `SacrificePresentation`.
 
 None of these are god classes. They communicate through the event stream and
@@ -557,3 +566,105 @@ would be a lie, and the first version did exactly that until a test caught it.
 **Rooms live in memory.** A match is one 60-90 minute session between friends and
 there is nothing worth persisting across a restart yet. `MatchState` is plain
 JSON on purpose, so snapshotting is a small change when that stops being true.
+
+---
+
+## 15. Decisions made in Phase 3
+
+**A ring of seven, and the Dealer takes one of them.** Not a casino oval with the
+house on one side: a round table where he is simply *one of the seats*, which
+makes two players his immediate neighbours and nobody safely opposite him. The
+shape should say séance before anything else does.
+
+**Nothing is loaded.** The table, the chairs, the bodies, the Dealer and all
+fifty-two card faces are built from primitives and a canvas at startup. No
+models, no textures, no asset pipeline, no versioning — the whole scene changes
+shape by editing numbers. That will not survive contact with real art direction,
+but it is the right trade while the layout is still moving.
+
+**One texture for every card.** The atlas is painted into a single canvas at
+startup, so the board and twelve hole cards share one material. Cell geometry is
+a pure function with its own tests, because a UV convention error renders every
+card upside down and looks like an art problem rather than a maths one.
+
+**The world holds objects; the DOM holds words.** Cards, chips, hands and the
+Dealer are in the scene. Names, stacks, the blind clock and the action bar are
+DOM on top of it. Text in WebGL is expensive, blurry and awkward to click, and a
+bet slider is a bet slider.
+
+**Nameplates sit at chest height, not above heads.** A seated player looks *down*
+at the felt, so anything floating over a head is outside the frustum. The first
+version put every label behind the top bar where nobody could see it.
+
+**One mesh per finger.** This was the open question from Phase 2, and the answer
+is per-finger meshes with procedural placement rather than baked hand poses. The
+second sacrifice takes a finger and the hand stays that way for the rest of the
+match; that has to be a property of the model, not an animation that ends. Hiding
+a mesh is the cheapest possible way to make it permanent, and `Avatar.removeFinger`
+already does it.
+
+**Cameras look down -Z; bodies face +Z.** Opposite signs, and mixing them seats
+four of six players facing into the dark. The first version did exactly that, and
+the test agreed with it because the test restated the same wrong convention. The
+tests now build a real `PerspectiveCamera` and ask Three.js which way it is
+looking rather than asserting an assumption twice.
+
+**Free-look on drag, not pointer lock.** Pointer lock is the better feel and
+Phase 4 should revisit it, but it fights a DOM action bar, and a table you cannot
+bet at is not worth looking around. Yaw and pitch are clamped to what someone in
+a chair could manage, which does more for feeling stuck at this table than any
+amount of geometry.
+
+**The scene is a pure function of the view.** `GameScene.apply(view)` derives
+everything from the latest `ClientView` and keeps no history of its own. It never
+renders a card it was not given: `visibleFaces` — the single place the client
+decides what a card shows — is pulled out as a pure function with its own tests,
+so "we never draw a face we do not have" is a property rather than a claim.
+
+### The performance budget
+
+Measured from the seated camera, which is the one players actually use, with
+`npm run shots`:
+
+| Players | Draw calls | Triangles |
+|---|---|---|
+| 4 | 131 | 6.5k |
+| 6 | 173 | 8.3k |
+
+The shape that matters is the slope: **about twenty-one draw calls and a thousand
+triangles per seated player**, from the twenty or so meshes a body needs in order
+to have separately articulated hands. That is affordable at six and would not be
+at sixteen, which is fine — the table seats six.
+
+A camera that can see the whole room at once (the debug free-look) costs about
+thirty more draw calls than any seat does, because a seated player has the far
+half of the room behind their own shoulder. Frustum culling is doing real work
+here, and it is worth measuring from a seat rather than from above.
+
+Deliberate choices behind those numbers:
+
+- **Chips are a single `InstancedMesh`.** Several hundred of them, six stacks,
+  six bets and the pot, for one draw call. This is the one count that could
+  genuinely run away, so it was solved before it became a problem.
+- **Materials are shared from one palette**, so the renderer switches material
+  state a handful of times per frame rather than once per object.
+- **One shadow-casting light.** The lamp over the table, at a 1024² map.
+  Everything else is unshadowed fill, and heavy fog does the rest.
+- **Pixel ratio is capped at 2.** A 3× display would otherwise quadruple the
+  pixel cost of a scene whose point is that most of it is dark.
+
+Frame times were not measured on real hardware — the automated runs use software
+rendering, where they mean nothing. Getting a number on a real GPU is worth doing
+before Phase 5 adds atmosphere on top of this.
+
+The next lever, if six animated players ever cost too much, is merging each
+avatar's static parts into one geometry and keeping only the hands separate. It
+is deliberately not done yet: nothing has proved it necessary, and it would trade
+away the joint hierarchy that Phase 6's trembling needs.
+
+### What Phase 3 knowingly leaves undone
+
+Lighting is a placeholder — one lamp and some fill, enough to be readable. The
+oppressive, dirty, intimate room the brief describes is Phase 5's job, and doing
+it now would mean tuning atmosphere against geometry that is still moving. Faces
+are featureless blocks for the same reason. Nothing animates yet.

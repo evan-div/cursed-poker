@@ -11,7 +11,12 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['shared/**/*.test.ts', 'server/**/*.test.ts', 'tests/**/*.test.ts'],
+    include: [
+      'shared/**/*.test.ts',
+      'server/**/*.test.ts',
+      'client/**/*.test.ts',
+      'tests/**/*.test.ts',
+    ],
     environment: 'node',
     // The poker fuzz/simulation suites play tens of thousands of hands.
     testTimeout: 120_000,

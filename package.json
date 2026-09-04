@@ -19,10 +19,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b tsconfig.json",
-    "sim": "vitest run tests/match-simulation.test.ts"
+    "sim": "vitest run tests/match-simulation.test.ts",
+    "shots": "node scripts/table-shots.mjs",
+    "dev:fast": "DEV_FAST=1 npm --workspace @cursed/server run dev"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "playwright": "^1.62.1",
     "tsx": "^4.23.13",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

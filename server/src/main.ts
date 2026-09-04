@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { Server as SocketIoServer } from 'socket.io';
 import { GameServer } from './net/game-server.js';
 import { SocketIoTransport } from './net/socketio-transport.js';
+import type { BlindStructure } from '@cursed/shared';
 
 /**
  * Development entry point.
@@ -45,10 +46,35 @@ const io = new SocketIoServer(httpServer, {
   maxHttpBufferSize: 8 * 1024,
 });
 
+/**
+ * A short match, for working on everything that happens *after* the poker.
+ *
+ * Sacrifices, eliminations, the Dealer taking someone away — none of it is
+ * reachable in a 60-90 minute match you have to play out by hand. `DEV_FAST=1`
+ * gives everyone two big blinds and a fast clock, so the interesting states
+ * arrive in under a minute.
+ */
+const FAST_STRUCTURE: BlindStructure = {
+  id: 'dev-fast',
+  label: 'Development (short stacks)',
+  startingStackBigBlinds: 3,
+  levels: [{ level: 1, smallBlind: 50, bigBlind: 100, ante: 0, durationSeconds: 600 }],
+};
+
+const fast = process.env.DEV_FAST === '1';
+
 const gameServer = new GameServer({
   transport: new SocketIoTransport(io),
   ...(process.env.SESSION_SECRET ? { sessionSecret: process.env.SESSION_SECRET } : {}),
+  ...(fast
+    ? {
+        structure: FAST_STRUCTURE,
+        timings: { actionTimeoutMs: 8_000, showdownDisplayMs: 2_500, betweenHandsMs: 1_200 },
+      }
+    : {}),
 });
+
+if (fast) console.log('[cursed-poker] DEV_FAST: three big blinds each, short clocks');
 
 if (!process.env.SESSION_SECRET) {
   console.warn(
