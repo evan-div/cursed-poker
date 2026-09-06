@@ -11,11 +11,42 @@
  * restart one without the other.
  */
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+/**
+ * A session secret that survives a restart.
+ *
+ * Without one the server generates a random secret at boot, so every restart
+ * invalidates every reconnect token: the tab says "Connection lost" and then
+ * cannot rejoin the lobby it was sitting in. During development the server
+ * restarts whenever a source file is saved, which made a five-second edit cost
+ * a whole lobby.
+ *
+ * Generated once and kept in a gitignored file rather than hardcoded, so there
+ * is no secret in the repository and no shared value between machines. It is a
+ * development convenience only — production still sets `SESSION_SECRET`.
+ */
+function devSessionSecret() {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+
+  const file = join(root, '.dev-session-secret');
+  if (existsSync(file)) {
+    const stored = readFileSync(file, 'utf8').trim();
+    if (stored.length >= 32) return stored;
+  }
+
+  const generated = randomBytes(32).toString('hex');
+  writeFileSync(file, `${generated}\n`, { mode: 0o600 });
+  return generated;
+}
+
+const sessionSecret = devSessionSecret();
 
 const COLORS = { server: '\x1b[35m', client: '\x1b[36m', reset: '\x1b[0m' };
 const useColor = process.stdout.isTTY;
@@ -24,7 +55,11 @@ const children = [];
 let shuttingDown = false;
 
 function start(name, args) {
-  const child = spawn(npm, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(npm, args, {
+    cwd: root,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, SESSION_SECRET: sessionSecret },
+  });
   const tint = useColor ? COLORS[name] : '';
   const reset = useColor ? COLORS.reset : '';
   const label = `${tint}[${name}]${reset}`;

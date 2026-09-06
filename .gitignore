@@ -8,3 +8,6 @@ coverage/
 .env.local
 .vite/
 .shots/
+
+# Generated on first `npm run dev`, so lobbies survive a server restart.
+.dev-session-secret

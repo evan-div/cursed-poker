@@ -100,9 +100,14 @@ The UI says `offline` in the top right when the socket cannot reach the server.
   Free the port (`lsof -ti:5173 | xargs kill`) or set `PORT` for the server and
   `VITE_SERVER_URL` for the client to match.
 - **A stale server from a previous run.** `lsof -ti:3001 | xargs kill`.
-- **Reconnect tokens stop working after a restart.** Expected: without
-  `SESSION_SECRET` the server generates a random one at boot. Set it to keep
-  sessions across restarts.
+- **Reconnect tokens stop working after a restart.** `npm run dev` generates a
+  secret once into `.dev-session-secret` (gitignored) and reuses it, so lobbies
+  survive the restarts that saving a file causes. Running the server on its own
+  with `npm run dev:server` does not — set `SESSION_SECRET` yourself there.
+- **The server restarts every few seconds on its own.** Fixed: `tsx watch` was
+  following the workspace's hoisted `node_modules` and restarting on any change
+  in it, which dropped every socket. If you see it again, check the `--exclude`
+  flags on `@cursed/server`'s `dev` script.
 
 `CLIENT_ORIGIN` restricts which browser origin may connect. Leave it unset in
 development and any `localhost` origin is accepted; set it in production and only
