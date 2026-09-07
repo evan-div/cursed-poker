@@ -1,4 +1,4 @@
-import { BoxGeometry, CylinderGeometry, Group, Mesh, Vector3 } from 'three';
+import { BoxGeometry, CylinderGeometry, Euler, Group, Mesh, Quaternion, Vector3 } from 'three';
 import { GAZE_AWAY, type GazeTarget } from '@cursed/shared';
 import { MATERIALS } from './materials.js';
 import {
@@ -11,6 +11,8 @@ import {
 } from './layout.js';
 import { buildHand, jointTowards, segment, type HandParts } from './body.js';
 import { gazePoint } from './gaze.js';
+import { peelContact, shieldContact } from './hold.js';
+import { solveArm } from './ik.js';
 
 /**
  * A person at the table.
@@ -40,6 +42,24 @@ const MAX_HEAD_TURN_PER_SECOND = 2.6;
 const NECK_PIVOT = { y: 1.1, z: 0.02 } as const;
 
 /**
+ * Which arm is which.
+ *
+ * A body facing its own +Z with +Y up has its right hand on -X, which is the
+ * arm built with `side = -1`. It is the one that reaches for the cards, because
+ * the peel's leading corner is on the player's right.
+ */
+const RIGHT = 0;
+const LEFT = 1;
+
+/**
+ * Which way an elbow breaks: down and out, away from the ribs.
+ *
+ * Without a pole the joint is free to spin about the shoulder-to-wrist axis, and
+ * an arm reaching for a card would pick a different elbow every frame.
+ */
+const ELBOW_POLE = new Vector3(0, -0.85, -0.5).normalize();
+
+/**
  * How far a head turns before the shoulders would have to.
  *
  * Tighter than the camera's own limits. A player may swivel their view most of
@@ -52,6 +72,19 @@ const HEAD_LIMITS = {
   pitchDown: (-52 * Math.PI) / 180,
   pitchUp: (28 * Math.PI) / 180,
 } as const;
+
+/** Everything needed to re-aim one arm after it has been built. */
+interface ArmChain {
+  shoulder: Vector3;
+  upper: Group;
+  upperLength: number;
+  elbow: Group;
+  forearm: Group;
+  forearmLength: number;
+  hand: HandParts;
+  /** Where this hand rests when it is not doing anything. */
+  restAt: Vector3;
+}
 
 export class Avatar {
   readonly group = new Group();
@@ -71,6 +104,13 @@ export class Avatar {
   #peek = 0;
   #leaningIn = 0;
   #lean = 0;
+  #lift = 0;
+  #arms: ArmChain[] = [];
+  #reach = 0;
+  #shield = 0;
+  #curl = 0;
+  #target = new Vector3();
+  #handTilt = new Quaternion();
 
   constructor(readonly seatIndex: number) {
     const station = seatStation(seatIndex);
@@ -184,9 +224,16 @@ export class Avatar {
     return this.#gaze;
   }
 
-  /** How far this player has their cards up, 0..1. Drives the lean, not the cards. */
-  setPeek(exposure: number): void {
+  /**
+   * How this player is handling their cards.
+   *
+   * `exposure` is the curl of a corner under a fingertip; `lift` is the pair
+   * coming off the table altogether. Both move the same hand — the right one —
+   * because both are the same hand doing more of the same thing.
+   */
+  setPeek(exposure: number, lift = 0): void {
     this.#peek = clamp(exposure, 0, 1);
+    this.#lift = clamp(lift, 0, 1);
   }
 
   /** How far they are craning over the table to see the board, 0..1. */
@@ -215,6 +262,111 @@ export class Avatar {
     const wanted = Math.max(this.#peek, this.#leaningIn);
     this.#lean += (wanted - this.#lean) * (1 - Math.exp(-7 * delta));
     this.#torso.rotation.x = this.#torsoRestX - this.#lean * 0.16;
+
+    this.#updateHands(delta);
+  }
+
+  /**
+   * Puts the right hand on the cards, and keeps it there while they move.
+   *
+   * The cards used to float: they rose off the table on their own while both
+   * hands stayed flat on the felt, which read as a séance rather than a card
+   * game. Now the hand goes to the corner it is curling and travels up with the
+   * pair when they leave the table, and the elbow is solved for rather than
+   * authored — see `ik.ts`.
+   */
+  #updateHands(delta: number): void {
+    const ease = 1 - Math.exp(-8 * delta);
+    this.#reachRight(this.#arms[RIGHT], ease);
+    this.#shieldLeft(this.#arms[LEFT], ease);
+  }
+
+  /** The off hand, cupped against the far side of a raised pair. */
+  #shieldLeft(arm: ArmChain | undefined, ease: number): void {
+    if (!arm) return;
+    this.#shield += (this.#lift - this.#shield) * ease;
+
+    if (this.#shield < 1e-3) {
+      this.#aimArm(arm, arm.restAt, 0);
+      arm.hand.curl(0);
+      return;
+    }
+
+    const at = shieldContact(this.seatIndex, this.#lift);
+    this.#target.set(at.x, at.y, at.z);
+    this.group.worldToLocal(this.#target);
+    this.#wristBehind(this.#target, this.#lift);
+    this.#target.lerpVectors(arm.restAt, this.#target, this.#shield);
+
+    this.#aimArm(arm, this.#target, this.#lift);
+    arm.hand.curl(this.#shield * 0.45);
+  }
+
+  #reachRight(arm: ArmChain | undefined, ease: number): void {
+    if (!arm) return;
+
+    // The hand commits to the cards a little ahead of the fingers closing, so
+    // it arrives before it starts to pull rather than dragging them from afar.
+    const wanted = Math.min(1, Math.max(this.#peek * 1.6, this.#lift));
+    this.#reach += (wanted - this.#reach) * ease;
+    this.#curl += (Math.max(this.#peek, this.#lift) - this.#curl) * ease;
+
+    if (this.#reach < 1e-3) {
+      this.#aimArm(arm, arm.restAt, 0);
+      arm.hand.curl(0);
+      return;
+    }
+
+    // Where the fingertips belong, in this body's own space.
+    const contact = peelContact(this.seatIndex, this.#peek, this.#lift);
+    this.#target.set(contact.x, contact.y, contact.z);
+    this.group.worldToLocal(this.#target);
+
+    this.#wristBehind(this.#target, this.#lift);
+    this.#target.lerpVectors(arm.restAt, this.#target, this.#reach);
+
+    this.#aimArm(arm, this.#target, this.#lift);
+    arm.hand.curl(this.#curl * 0.8);
+  }
+
+  /**
+   * Moves a fingertip target back to where the wrist behind it should be.
+   *
+   * Which way "back" points depends on what the hand is doing, and getting it
+   * wrong is very visible. A hand flat on the felt has its wrist nearer the
+   * player than its fingers. A hand holding cards *up* has its wrist
+   * underneath them — you look at your cards over the top of your own fingers,
+   * not through your own forearm. Putting the wrist behind the cards in both
+   * cases filled the screen with the player's own arms and hid the very thing
+   * they had just picked up.
+   */
+  #wristBehind(target: Vector3, lift: number): void {
+    const raised = clamp(lift, 0, 1);
+    target.z -= HAND_LENGTH * (1 - raised);
+    target.y -= HAND_LENGTH * raised;
+    target.z += 0.02 * raised;
+  }
+
+  /** Solves one arm onto a wrist position and orients the hand. */
+  #aimArm(arm: ArmChain, wristAt: Vector3, tilt: number): void {
+    const solved = solveArm(arm.shoulder, wristAt, arm.upperLength, arm.forearmLength, ELBOW_POLE);
+
+    const toElbow = solved.elbow.clone().sub(arm.shoulder).normalize();
+    arm.upper.quaternion.setFromUnitVectors(FORWARD, toElbow);
+
+    const toWrist = solved.wrist
+      .clone()
+      .sub(solved.elbow)
+      .applyQuaternion(arm.upper.quaternion.clone().invert())
+      .normalize();
+    arm.forearm.quaternion.setFromUnitVectors(FORWARD, toWrist);
+
+    // Undo everything the arm did on the way here, then tip the palm up so a
+    // raised hand cradles the cards rather than dangling them.
+    const accumulated = arm.upper.quaternion.clone().multiply(arm.forearm.quaternion).invert();
+    // Palm turning upward as the hand comes under a raised pair.
+    this.#handTilt.setFromEuler(new Euler(-HAND_LIFT_TILT * tilt, 0, 0));
+    arm.hand.group.quaternion.copy(accumulated.multiply(this.#handTilt));
   }
 
   #headWorldPosition(): { x: number; y: number; z: number } {
@@ -275,6 +427,16 @@ export class Avatar {
     wrist.add(hand.group);
 
     this.hands.push(hand);
+    this.#arms.push({
+      shoulder: shoulderAt,
+      upper: upper.joint,
+      upperLength: upper.length,
+      elbow,
+      forearm: forearm.joint,
+      forearmLength: forearm.length,
+      hand,
+      restAt: wristAt.clone(),
+    });
     return upper.joint;
   }
 }
@@ -288,3 +450,12 @@ function wrapAngle(angle: number): number {
 function limit(value: number, most: number): number {
   return Math.min(Math.max(value, -most), most);
 }
+
+/** A hand's own +Z, which is the way its fingers point. */
+const FORWARD = new Vector3(0, 0, 1);
+
+/** Wrist to fingertip, so a wrist can be placed from a fingertip target. */
+const HAND_LENGTH = 0.1;
+
+/** How far the palm tips up when the cards come off the table, in radians. */
+const HAND_LIFT_TILT = 1.0;

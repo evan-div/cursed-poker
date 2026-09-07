@@ -44,14 +44,22 @@ export interface HandOptions {
 export interface HandParts {
   group: Group;
   /**
-   * The five digits, thumb first, each its own mesh.
+   * The five digits, thumb first, each its own hinge at the knuckle.
    *
-   * One mesh per finger is the whole point: the second sacrifice takes one, and
-   * "the hand now has four fingers" has to be a property of the model for the
-   * rest of the match, not a cutaway that ends when the animation does. Hiding
-   * a mesh is the cheapest possible way to make that permanent.
+   * One object per finger is the whole point: the second sacrifice takes one,
+   * and "the hand now has four fingers" has to be a property of the model for
+   * the rest of the match, not a cutaway that ends when the animation does.
+   * Hiding a knuckle takes its finger with it.
+   *
+   * They are knuckles rather than bare meshes so fingers can *curl*. A finger
+   * mesh centred on its own middle rotates about its middle, which bends a
+   * finger in half around a point an inch out in the air. Rotating a limb about
+   * a joint means putting the joint at the origin — the same lesson the head
+   * taught, one bone further out.
    */
-  fingers: Mesh[];
+  fingers: Group[];
+  /** Curls every finger toward the palm. 0 flat, 1 closed. */
+  curl(amount: number): void;
 }
 
 export function buildHand(options: HandOptions): HandParts {
@@ -63,36 +71,56 @@ export function buildHand(options: HandOptions): HandParts {
   palm.castShadow = true;
   group.add(palm);
 
-  const fingers: Mesh[] = [];
+  const fingers: Group[] = [];
   const geometry = new BoxGeometry(
     options.fingerThickness,
     options.fingerThickness * 0.8,
     options.fingerLength,
   );
 
+  /** A finger hinged at its knuckle, with the bone hanging off in front. */
+  const digit = (name: string, at: [number, number, number], scale: number, yaw: number): Group => {
+    const knuckle = new Group();
+    knuckle.name = name;
+    knuckle.position.set(at[0], at[1], at[2]);
+    knuckle.rotation.y = yaw;
+
+    const bone = new Mesh(geometry, options.material);
+    bone.scale.z = scale;
+    bone.position.z = (options.fingerLength * scale) / 2;
+    bone.castShadow = true;
+    knuckle.add(bone);
+
+    group.add(knuckle);
+    fingers.push(knuckle);
+    return knuckle;
+  };
+
   // Four fingers off the front edge of the palm, longest in the middle.
   const lengths = [1, 1.08, 1, 0.86];
   for (let i = 0; i < 4; i++) {
-    const finger = new Mesh(geometry, options.material);
-    finger.name = `finger-${i + 1}`;
     const offset = (i - 1.5) * options.fingerThickness * 1.22;
-    finger.position.set(offset, 0, along / 2 + (options.fingerLength * lengths[i]!) / 2);
-    finger.scale.z = lengths[i]!;
-    finger.rotation.y = -offset * splay * 12;
-    finger.castShadow = true;
-    group.add(finger);
-    fingers.push(finger);
+    digit(`finger-${i + 1}`, [offset, 0, along / 2], lengths[i]!, -offset * splay * 12);
   }
 
   // The thumb, off the side and angled in.
-  const thumb = new Mesh(geometry, options.material);
-  thumb.name = 'thumb';
-  thumb.scale.z = 0.72;
-  thumb.position.set(-across / 2 - options.fingerThickness * 0.3, 0, along * 0.18);
-  thumb.rotation.y = 0.95;
-  thumb.castShadow = true;
-  group.add(thumb);
+  const thumb = digit(
+    'thumb',
+    [-across / 2 - options.fingerThickness * 0.3, 0, along * 0.18],
+    0.72,
+    0.95,
+  );
+  fingers.pop();
   fingers.unshift(thumb);
 
-  return { group, fingers };
+  const curl = (amount: number) => {
+    const closed = Math.min(Math.max(amount, 0), 1);
+    fingers.forEach((finger, index) => {
+      // The thumb comes in from the side and folds less than the rest.
+      const reach = index === 0 ? 0.6 : 1;
+      finger.rotation.x = closed * 1.35 * reach;
+    });
+  };
+
+  return { group, fingers, curl };
 }

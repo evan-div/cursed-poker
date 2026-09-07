@@ -156,6 +156,16 @@ phase's three real bugs were invisible in a screenshot.
       short dead zone so it is never an overshoot. Replicated as its own field:
       it is the most conspicuous thing anybody can do at this table
 
+### Fifth round (333 tests)
+
+- [x] **Hands do the peeling.** Two-bone IK (`ik.ts`) puts the right hand on the
+      corner it is curling and carries the cards up with it
+- [x] Fingers hinge at the knuckle and curl — they were meshes centred on their
+      own middles, which bent a finger around a point in mid-air
+- [x] The off hand comes up to shield a raised pair
+- [x] `hold.ts`: one set of numbers for where a card is, read by both the card
+      renderer and the avatar, so the hand and the card cannot disagree
+
 ---
 
 ## Phase 5 — The Dealer and atmosphere

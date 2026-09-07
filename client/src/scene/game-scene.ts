@@ -88,6 +88,11 @@ export class GameScene {
       onExposure: (exposure, lift) => {
         hooks.onExposure(exposure, lift);
         this.#cards.setLocalPeek(this.#seatIndex ?? null, exposure, lift);
+        // Their own hands, without waiting for the round trip: a player watching
+        // their own arm lag their own mouse is the one case latency is unfair.
+        const seat = this.#seatIndex;
+        const own = seat === null || seat === undefined ? undefined : this.#avatars.get(seat);
+        own?.setPeek(exposure, lift);
         // Curling a card brings your head down to it, which is most of how a
         // corner index becomes readable across half a metre of dark table.
         // Picking the cards up does the opposite — they come to you — so the
@@ -222,10 +227,11 @@ export class GameScene {
       const avatar = this.#avatars.get(seat.seatIndex);
       if (!avatar) continue;
       // The local player's own body is driven by their own input, not by an
-      // echo of it arriving 80ms later.
+      // echo of it arriving 80ms later — except their hands, which they can see
+      // and which have to agree with the cards they are holding.
       if (seat.seatIndex === this.#seatIndex) continue;
       avatar.setGaze(seat.gaze);
-      avatar.setPeek(Math.max(seat.peek, seat.lift));
+      avatar.setPeek(seat.peek, seat.lift);
       avatar.setLean(seat.lean);
     }
   }

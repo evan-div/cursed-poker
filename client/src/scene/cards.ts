@@ -1,18 +1,11 @@
 import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three';
-import { HAND_LIFT, type Card, type ClientView, type PresenceFrame, type SeatView } from '@cursed/shared';
+import type { Card, ClientView, PresenceFrame, SeatView } from '@cursed/shared';
 import { BACK_CELL, BLANK_CELL, faceCell } from './card-atlas.js';
 import { TOP_FACE, UNDERSIDE, applyPeel, makeCardGeometry, setFaceCell } from './card-mesh.js';
 import { cardAtlasTexture } from './card-texture.js';
 import { peelAngle } from './peel.js';
-import {
-  CARD,
-  RADIUS,
-  boardCardPosition,
-  seatPoint,
-  seatStation,
-  stationAngle,
-  type Vec3,
-} from './layout.js';
+import { heldCard, holeCardRest } from './hold.js';
+import { CARD, boardCardPosition, seatStation, stationAngle } from './layout.js';
 
 /**
  * Cards on the table.
@@ -137,24 +130,6 @@ interface HolePose {
 }
 
 /**
- * Where a seat's hole cards lie when nobody is touching them.
- *
- * Pure, and shared by the renderer and its tests: the two cards sit side by side
- * across their owner's line of sight, laid out so their faces read the right way
- * up from that chair.
- */
-export function holeCardRest(seatIndex: number, cardIndex: number): Vec3 {
-  const centre = seatPoint(seatIndex, RADIUS.holeCards);
-  const yaw = readableFromYaw(seatStation(seatIndex));
-  const offset = (cardIndex - 0.5) * (CARD.width + 0.006);
-  return {
-    x: centre.x + Math.cos(yaw) * offset,
-    y: centre.y + CARD.thickness / 2 + 0.001,
-    z: centre.z - Math.sin(yaw) * offset,
-  };
-}
-
-/**
  * How far a seat's cards are bent, given the exposure reported for that seat.
  *
  * The two cards do not come up together. The near one leads, which is how a
@@ -168,40 +143,16 @@ export function cardBend(cardIndex: number, exposure: number): number {
 /**
  * Where a card sits once its owner has picked it up.
  *
- * It rises off the felt, comes back toward the chest that is holding it, and
- * tilts up to face them — which is also the reason an opponent gets nothing out
- * of it, geometry aside: their client has no face to turn.
+ * The numbers come from `hold.ts`, which the avatar reads too — the hand and the
+ * card have to agree exactly, so neither of them owns the answer.
  */
 function applyHandPose(mesh: Mesh, seatIndex: number, cardIndex: number, lift: number): void {
-  const rest = holeCardRest(seatIndex, cardIndex);
+  const held = heldCard(seatIndex, cardIndex, lift);
   // Set absolutely, never accumulated: this runs every frame, and a rotation
   // that adds to itself sixty times a second is a card in orbit.
-  const flat = -Math.PI / 2;
-
-  if (lift <= 0) {
-    mesh.position.set(rest.x, rest.y, rest.z);
-    mesh.rotation.x = flat;
-    mesh.rotation.z = 0;
-    return;
-  }
-
-  // Eased, so the cards come off the table with some weight rather than
-  // snapping into the air the instant the gesture breaks through.
-  const raised = lift * lift * (3 - 2 * lift);
-
-  const angle = stationAngle(seatStation(seatIndex));
-  const outward = { x: Math.sin(angle), z: -Math.cos(angle) };
-
-  mesh.position.set(
-    rest.x + outward.x * HAND_LIFT.reach * raised,
-    rest.y + HAND_LIFT.height * raised,
-    rest.z + outward.z * HAND_LIFT.reach * raised,
-  );
-  // Tipped back toward its owner, the way a hand held up to a face is. The
-  // curl is still there underneath: a lifted hand is a peeked one, continued.
-  mesh.rotation.x = flat - HAND_LIFT.tilt * raised;
-  // Fanned very slightly apart, because two cards in one hand are never square.
-  mesh.rotation.z = (cardIndex === 0 ? 1 : -1) * 0.09 * raised;
+  mesh.position.set(held.position.x, held.position.y, held.position.z);
+  mesh.rotation.x = held.tilt;
+  mesh.rotation.z = held.roll;
 }
 
 export class CardRenderer {

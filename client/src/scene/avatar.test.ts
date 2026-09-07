@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { Vector3 } from 'three';
+import { Vector3, type Object3D } from 'three';
 import { Avatar } from './avatar.js';
 import { gazePoint } from './gaze.js';
+import { peelContact } from './hold.js';
+import { TABLE } from './layout.js';
 
 /**
  * Bodies at the table.
@@ -105,5 +107,119 @@ describe('a head on a neck', () => {
       const at = gazePoint({ kind: 'SEAT', seatIndex }, 0)!;
       expect(at.y).toBeGreaterThan(1);
     }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Hands
+// ---------------------------------------------------------------------------
+
+/** Where a named part of the avatar has ended up in the world. */
+function worldOf(avatar: Avatar, object: Object3D): Vector3 {
+  avatar.group.updateMatrixWorld(true);
+  return object.getWorldPosition(new Vector3());
+}
+
+/** The tip of the middle finger of a hand, which is what touches a card. */
+function fingertip(avatar: Avatar, hand: 0 | 1): Vector3 {
+  const knuckle = avatar.hands[hand]!.fingers[2]!;
+  avatar.group.updateMatrixWorld(true);
+  // The bone hangs off the knuckle along its own +Z.
+  const bone = knuckle.children[0]!;
+  return worldOf(avatar, bone);
+}
+
+describe('hands on the cards', () => {
+  it('leaves both hands on the felt when nobody is touching anything', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      settle(avatar);
+      for (const hand of [0, 1] as const) {
+        const at = worldOf(avatar, avatar.hands[hand]!.group);
+        expect(Math.abs(at.y - TABLE.surfaceHeight)).toBeLessThan(0.1);
+      }
+    }
+  });
+
+  it('reaches the right hand to the corner it is curling', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      avatar.setPeek(1, 0);
+      settle(avatar);
+
+      const contact = peelContact(seatIndex, 1, 0);
+      const tip = fingertip(avatar, 0);
+      const missed = tip.distanceTo(new Vector3(contact.x, contact.y, contact.z));
+      expect(missed, `seat ${seatIndex} missed the card by ${missed.toFixed(3)}m`).toBeLessThan(0.1);
+    }
+  });
+
+  it('carries the cards up with the hand rather than letting them float', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      avatar.setPeek(1, 1);
+      settle(avatar);
+
+      const contact = peelContact(seatIndex, 1, 1);
+      const tip = fingertip(avatar, 0);
+      const missed = tip.distanceTo(new Vector3(contact.x, contact.y, contact.z));
+      expect(missed, `seat ${seatIndex} let its cards float by ${missed.toFixed(3)}m`).toBeLessThan(0.12);
+      // And it is genuinely up off the table, not still on the felt.
+      expect(tip.y).toBeGreaterThan(TABLE.surfaceHeight + 0.15);
+    }
+  });
+
+  it('brings the off hand up to shield a raised pair, and not before', () => {
+    const avatar = new Avatar(0);
+    settle(avatar);
+    const resting = worldOf(avatar, avatar.hands[1]!.group).y;
+
+    avatar.setPeek(1, 0);
+    settle(avatar);
+    expect(worldOf(avatar, avatar.hands[1]!.group).y).toBeCloseTo(resting, 2);
+
+    avatar.setPeek(1, 1);
+    settle(avatar);
+    expect(worldOf(avatar, avatar.hands[1]!.group).y).toBeGreaterThan(resting + 0.1);
+  });
+
+  it('curls the fingers as the corner comes up, and opens them again', () => {
+    const avatar = new Avatar(3);
+    settle(avatar);
+    const open = avatar.hands[0]!.fingers[2]!.rotation.x;
+
+    avatar.setPeek(1, 0);
+    settle(avatar);
+    expect(avatar.hands[0]!.fingers[2]!.rotation.x).toBeGreaterThan(open + 0.3);
+
+    avatar.setPeek(0, 0);
+    settle(avatar);
+    expect(avatar.hands[0]!.fingers[2]!.rotation.x).toBeCloseTo(open, 2);
+  });
+
+  it('keeps the arm an arm: bones do not stretch to reach', () => {
+    const avatar = new Avatar(0);
+    const lengths: number[] = [];
+    for (const lift of [0, 0.5, 1]) {
+      avatar.setPeek(1, lift);
+      settle(avatar);
+      const wrist = worldOf(avatar, avatar.hands[0]!.group);
+      const shoulder = worldOf(avatar, avatar.group);
+      lengths.push(wrist.distanceTo(shoulder));
+    }
+    // Every pose is within what the arm could span; none of them is absurd.
+    for (const length of lengths) expect(length).toBeLessThan(1.4);
+  });
+
+  it('goes back to the felt when the hand is put down', () => {
+    const avatar = new Avatar(2);
+    avatar.setPeek(1, 1);
+    settle(avatar);
+    avatar.setPeek(0, 0);
+    settle(avatar);
+
+    const at = worldOf(avatar, avatar.hands[0]!.group);
+    expect(Math.abs(at.y - TABLE.surfaceHeight)).toBeLessThan(0.1);
   });
 });

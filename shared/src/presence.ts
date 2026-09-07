@@ -112,9 +112,15 @@ export const HAND_LIFT = {
   /** Travel from breaking free to fully raised. */
   travelPixels: 170,
   /** How high the cards end up above the felt, in metres. */
-  height: 0.3,
-  /** How far they come back toward their owner as they rise. */
-  reach: 0.13,
+  height: 0.26,
+  /**
+   * How far they come back toward their owner as they rise.
+   *
+   * Not too far. Cards held right under the chin put the hands holding them
+   * between the player and the cards, and a screen full of your own forearms is
+   * not an inspection.
+   */
+  reach: 0.06,
   /** How far they tilt up to face their owner at full height, in radians. */
   tilt: 1.15,
   /** How fast released cards fall back to the felt, in units per second. */

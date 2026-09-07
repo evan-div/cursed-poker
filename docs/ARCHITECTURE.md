@@ -1037,3 +1037,53 @@ sixty times a second is a card in orbit.
 
 Falling is ordered: a released hand comes down to the felt first and flattens
 onto it second, in the reverse of the order it went up.
+
+
+### Hands that do the work
+
+The cards moved on their own. They curled, they came off the table, they hung in
+the air in front of a player whose hands were still lying flat on the felt — a
+séance rather than a card game.
+
+Three pieces fixed it.
+
+**`ik.ts` — a two-bone solver.** The arms were built once from three fixed points
+and never moved again, which is fine while hands only rest on a table and useless
+the moment one has to arrive somewhere. Given a shoulder and a wrist target, the
+elbow is where two spheres meet; the closed form is faster than iterating and
+completely predictable. A `pole` picks which point on that circle, which is what
+stops elbows inverting through torsos and what stops an arm choosing a different
+answer sixty times a second. Out-of-reach targets pull the wrist back onto the
+edge of the arm's span, because an arm that stretches looks far worse than one
+that falls short.
+
+**`hold.ts` — one set of numbers, used twice.** The card renderer puts the cards
+somewhere and the avatar puts its hand somewhere, and if those two disagree by a
+centimetre the cards float. So neither of them owns the answer: both read the
+same pure functions, and the tests check that a fingertip lands on the corner the
+fold is running from.
+
+**Fingers that pivot at the knuckle.** They were bare meshes centred on their own
+middles, so rotating one bent a finger in half around a point an inch out in the
+air. Each is a hinge at the knuckle now with the bone hanging off in front —
+exactly the lesson the head taught, one joint further out. `removeFinger` still
+works, because hiding a knuckle takes its finger with it.
+
+The right hand does the peeling, and it is the right hand for a reason: a person
+facing the middle of the table has the table's clockwise direction on their
+right, which is the side the fold's leading corner is on. The off hand comes up
+to shield a raised pair and stays out of it otherwise, because a hand hovering
+over cards lying flat on the felt looks like a threat.
+
+**Which way the wrist sits behind the fingers depends on what the hand is doing**,
+and getting it wrong was very visible. A hand flat on the felt has its wrist
+nearer the player than its fingers. A hand holding cards *up* has its wrist
+underneath them — you read your hand over the top of your own fingers, not
+through your own forearm. The first version used the flat-hand offset for both
+and filled the screen with the player's own arms, hiding the very thing they had
+just picked up. The cards are also held a little lower and less far back than
+they were, for the same reason.
+
+The local player's hands are driven straight from their own input rather than
+from the presence echo. Everything else about a body is fine arriving 80ms late;
+watching your own arm lag your own mouse is the one case where latency is unfair.
