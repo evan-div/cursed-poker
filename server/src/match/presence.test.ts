@@ -25,7 +25,7 @@ import {
 const T0 = 1_000_000;
 
 function input(over: Partial<PresenceInput> = {}): PresenceInput {
-  return { gaze: GAZE_AWAY, peek: 0, lean: 0, handlingChips: false, ...over };
+  return { gaze: GAZE_AWAY, peek: 0, lift: 0, lean: 0, handlingChips: false, ...over };
 }
 
 function frame(presence: PresenceState, now: number, seats = [0, 1, 2, 3]): PresenceFrame {
@@ -176,7 +176,7 @@ describe('looking at your own cards', () => {
     // And none of it is replicated. Phase 6 reads these; the table never does.
     const seat = frame(presence, T0 + 1_600).seats[0]!;
     expect(Object.keys(seat).sort()).toEqual(
-      ['gaze', 'handlingChips', 'lean', 'peek', 'present', 'seatIndex', 'stillMs'].sort(),
+      ['gaze', 'handlingChips', 'lean', 'lift', 'peek', 'present', 'seatIndex', 'stillMs'].sort(),
     );
   });
 
@@ -219,6 +219,7 @@ describe('the presence frame as a boundary', () => {
       'gaze',
       'kind',
       'peek',
+      'lift',
       'lean',
       'handlingChips',
       'stillMs',

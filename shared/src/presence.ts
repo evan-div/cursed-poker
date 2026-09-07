@@ -81,7 +81,7 @@ export const PEEK = {
    * itself and the face is squarely up, which is what somebody who actually
    * wants to know their hand does with it.
    */
-  maxLift: 2.9,
+  maxLift: 3.05,
   /** Exposure at which a rank becomes readable; below this it is a corner. */
   rankVisibleAt: 0.34,
   /** How quickly a released card falls back to the felt, in exposure per second. */
@@ -91,6 +91,34 @@ export const PEEK = {
    * coarse enough that measuring an opponent's exposure is pointless.
    */
   quantiseSteps: 16,
+} as const;
+
+/**
+ * Picking the cards up off the table.
+ *
+ * Past a full peel the gesture breaks through into a second movement: keep
+ * pulling and the cards come off the felt entirely and up in front of your
+ * face, where you can finally just *look* at them.
+ *
+ * This is the loudest thing a player can do at this table, and deliberately so.
+ * At a real game, lifting your hole cards off the cloth is the move everybody
+ * notices and most rooms discourage; here it is available, it works, and every
+ * other player watches you do it. That is the trade: certainty about your own
+ * hand, bought with the most conspicuous gesture in the game.
+ */
+export const HAND_LIFT = {
+  /** Pointer travel past a full peel before the cards leave the table. */
+  breakPixels: 60,
+  /** Travel from breaking free to fully raised. */
+  travelPixels: 170,
+  /** How high the cards end up above the felt, in metres. */
+  height: 0.3,
+  /** How far they come back toward their owner as they rise. */
+  reach: 0.13,
+  /** How far they tilt up to face their owner at full height, in radians. */
+  tilt: 1.15,
+  /** How fast released cards fall back to the felt, in units per second. */
+  dropPerSecond: 3.2,
 } as const;
 
 /**
@@ -169,8 +197,17 @@ export function quantisePeek(value: number): number {
 /** What a client reports about its own body. */
 export interface PresenceInput {
   gaze: GazeTarget;
-  /** How far this player has lifted their own cards, 0..1. */
+  /** How far this player has curled their own cards off the felt, 0..1. */
   peek: number;
+  /**
+   * How far they have picked their cards up off the table, 0..1.
+   *
+   * Separate from `peek` rather than an extension of it, because they are
+   * different acts: one is a corner bent under a fingertip and the other is a
+   * hand raised in front of a face. The table reads them differently, and so
+   * should the protocol.
+   */
+  lift: number;
   /** How far they are leaning in over the table, 0..1. */
   lean: number;
   /** True while they are handling chips — sizing a bet, reaching for a stack. */
@@ -187,8 +224,10 @@ export interface PresenceInput {
 export interface SeatPresence {
   seatIndex: number;
   gaze: GazeTarget;
-  /** How far their cards are lifted. Never what is on them. */
+  /** How far their cards are curled off the felt. Never what is on them. */
   peek: number;
+  /** How far they have picked their cards up off the table. */
+  lift: number;
   /** How far they are leaning in over the table. */
   lean: number;
   handlingChips: boolean;

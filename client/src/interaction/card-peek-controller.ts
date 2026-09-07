@@ -18,8 +18,8 @@ import { PeekGesture } from './peek.js';
 export interface CardPeekOptions {
   /** Called the first time a hold begins in a hand: ask the server for the cards. */
   onFirstLook: () => void;
-  /** Called whenever exposure changes, for reporting and rendering. */
-  onExposure: (exposure: number) => void;
+  /** Called whenever the curl or the raise changes, for reporting and rendering. */
+  onExposure: (exposure: number, lift: number) => void;
 }
 
 const PEEK_KEY = 'v';
@@ -31,6 +31,7 @@ export class CardPeekController {
   #detach: (() => void) | null = null;
   #looked = false;
   #lastReported = -1;
+  #lastLift = -1;
 
   constructor(options: CardPeekOptions) {
     this.#options = options;
@@ -42,6 +43,11 @@ export class CardPeekController {
 
   get exposure(): number {
     return this.gesture.exposure;
+  }
+
+  /** How far the cards have been picked up off the table, 0..1. */
+  get lift(): number {
+    return this.gesture.lift;
   }
 
   /** A new hand: the cards go back down and the look must be earned again. */
@@ -122,9 +128,10 @@ export class CardPeekController {
   }
 
   #emit(): void {
-    if (this.gesture.exposure === this.#lastReported) return;
+    if (this.gesture.exposure === this.#lastReported && this.gesture.lift === this.#lastLift) return;
     this.#lastReported = this.gesture.exposure;
-    this.#options.onExposure(this.gesture.exposure);
+    this.#lastLift = this.gesture.lift;
+    this.#options.onExposure(this.gesture.exposure, this.gesture.lift);
   }
 }
 

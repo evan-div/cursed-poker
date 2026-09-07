@@ -1,5 +1,5 @@
 import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three';
-import type { Card, ClientView, PresenceFrame, SeatView } from '@cursed/shared';
+import { HAND_LIFT, type Card, type ClientView, type PresenceFrame, type SeatView } from '@cursed/shared';
 import { BACK_CELL, BLANK_CELL, faceCell } from './card-atlas.js';
 import { TOP_FACE, UNDERSIDE, applyPeel, makeCardGeometry, setFaceCell } from './card-mesh.js';
 import { cardAtlasTexture } from './card-texture.js';
@@ -132,6 +132,8 @@ export function visibleFaces(seat: SeatView, view: ClientView): (Card | null)[] 
 interface HolePose {
   /** Replicated exposure, 0..1. */
   peek: number;
+  /** How far they have been picked up off the table, 0..1. */
+  lift: number;
 }
 
 /**
@@ -163,6 +165,45 @@ export function cardBend(cardIndex: number, exposure: number): number {
   return peelAngle(clamp01(exposure) * (cardIndex === 0 ? 1.12 : 0.88));
 }
 
+/**
+ * Where a card sits once its owner has picked it up.
+ *
+ * It rises off the felt, comes back toward the chest that is holding it, and
+ * tilts up to face them — which is also the reason an opponent gets nothing out
+ * of it, geometry aside: their client has no face to turn.
+ */
+function applyHandPose(mesh: Mesh, seatIndex: number, cardIndex: number, lift: number): void {
+  const rest = holeCardRest(seatIndex, cardIndex);
+  // Set absolutely, never accumulated: this runs every frame, and a rotation
+  // that adds to itself sixty times a second is a card in orbit.
+  const flat = -Math.PI / 2;
+
+  if (lift <= 0) {
+    mesh.position.set(rest.x, rest.y, rest.z);
+    mesh.rotation.x = flat;
+    mesh.rotation.z = 0;
+    return;
+  }
+
+  // Eased, so the cards come off the table with some weight rather than
+  // snapping into the air the instant the gesture breaks through.
+  const raised = lift * lift * (3 - 2 * lift);
+
+  const angle = stationAngle(seatStation(seatIndex));
+  const outward = { x: Math.sin(angle), z: -Math.cos(angle) };
+
+  mesh.position.set(
+    rest.x + outward.x * HAND_LIFT.reach * raised,
+    rest.y + HAND_LIFT.height * raised,
+    rest.z + outward.z * HAND_LIFT.reach * raised,
+  );
+  // Tipped back toward its owner, the way a hand held up to a face is. The
+  // curl is still there underneath: a lifted hand is a peeked one, continued.
+  mesh.rotation.x = flat - HAND_LIFT.tilt * raised;
+  // Fanned very slightly apart, because two cards in one hand are never square.
+  mesh.rotation.z = (cardIndex === 0 ? 1 : -1) * 0.09 * raised;
+}
+
 export class CardRenderer {
   readonly group = new Group();
 
@@ -173,6 +214,7 @@ export class CardRenderer {
   #bent = new Map<Mesh, number>();
   #localSeat: number | null = null;
   #localPeek = 0;
+  #localLift = 0;
 
   constructor() {
     for (let i = 0; i < 5; i++) {
@@ -194,14 +236,17 @@ export class CardRenderer {
    * card follows the mouse. Everybody else's comes back through presence at the
    * broadcast rate, which is what they would see across a table anyway.
    */
-  setLocalPeek(seatIndex: number | null, exposure: number): void {
+  setLocalPeek(seatIndex: number | null, exposure: number, lift = 0): void {
     this.#localSeat = seatIndex;
     this.#localPeek = exposure;
+    this.#localLift = lift;
   }
 
   /** Everyone else's hands, from the presence broadcast. */
   applyPresence(frame: PresenceFrame): void {
-    for (const seat of frame.seats) this.#poses.set(seat.seatIndex, { peek: seat.peek });
+    for (const seat of frame.seats) {
+      this.#poses.set(seat.seatIndex, { peek: seat.peek, lift: seat.lift });
+    }
   }
 
   apply(view: ClientView): void {
@@ -238,27 +283,36 @@ export class CardRenderer {
   }
 
   /**
-   * Bends every seat's cards by however far its owner has curled them.
+   * Puts every seat's cards where its owner is holding them.
    *
-   * Called every frame rather than on every view, because a peek is a
-   * continuous movement and the view only changes when poker does. The vertex
-   * work is skipped whenever a card's bend has not actually changed, so a table
-   * of people sitting still costs nothing at all.
+   * Two movements, in sequence. First the card bends: the far edge stays pinned
+   * to the felt and the near corner curls up, which is a peek. Then, past a
+   * full curl, the pair comes off the table entirely and up in front of their
+   * owner's face, which is not a peek at all — it is somebody deciding they
+   * would rather be certain than discreet.
+   *
+   * Called every frame rather than on every view, because both are continuous
+   * movements and the view only changes when poker does. The vertex work is
+   * skipped whenever a card's bend has not changed, so a table of people
+   * sitting still costs nothing.
    */
   updatePoses(): void {
     for (const [seatIndex, meshes] of this.#hole) {
       // A revealed hand is lying face up on the table; nobody is holding it.
-      const exposure = this.#revealed.get(seatIndex)
-        ? 0
-        : seatIndex === this.#localSeat
-          ? this.#localPeek
-          : (this.#poses.get(seatIndex)?.peek ?? 0);
+      const revealed = this.#revealed.get(seatIndex) ?? false;
+      const own = seatIndex === this.#localSeat;
+      const pose = this.#poses.get(seatIndex);
+
+      const exposure = revealed ? 0 : own ? this.#localPeek : (pose?.peek ?? 0);
+      const lift = revealed ? 0 : own ? this.#localLift : (pose?.lift ?? 0);
 
       meshes.forEach((mesh, index) => {
         const bend = cardBend(index, exposure);
-        if (this.#bent.get(mesh) === bend) return;
-        this.#bent.set(mesh, bend);
-        applyPeel(mesh.geometry as BoxGeometry, bend);
+        if (this.#bent.get(mesh) !== bend) {
+          this.#bent.set(mesh, bend);
+          applyPeel(mesh.geometry as BoxGeometry, bend);
+        }
+        applyHandPose(mesh, seatIndex, index, lift);
       });
     }
   }

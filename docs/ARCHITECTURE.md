@@ -991,3 +991,49 @@ table is simply being nearer to it. Two tests had to change rather than be made
 to pass: past about 2.3 radians a curling tip starts coming *down* as it rolls
 over, so height is monotonic only up to there, and the peek and the lean are now
 measured in metres rather than compared as fractions.
+
+
+### Real cards, and picking them up
+
+**The faces are proper playing cards now.** The four-index version solved a real
+problem — a peeked corner was readable whichever one you curled — and it looked
+wrong, which people notice instantly, because they have been reading these
+arrangements since they were children. So: two indices, top-left and bottom-right
+rotated, and the standard pip layouts. Six is two columns of three; seven is six
+with one more between the top pair; eight is seven with its mirror below; the
+bottom half is printed upside down.
+
+`card-pips.ts` holds the layouts as fractions of the card, with tests that check
+each rank has the right number of pips, in columns, with the lower half inverted.
+One test had to be written around the seven, which is genuinely asymmetric: its
+odd pip sits above the middle with nothing below to match. That is what a real
+seven looks like, and "fixing" it would make the card wrong.
+
+Court cards are a monogram rather than an attempt at the engraved figures. A
+procedurally drawn king is a bad king, and at the size a card appears across this
+table the letter is what anybody reads.
+
+**Pulling past a full curl picks the cards up off the table.** The peek gesture
+now has two stages with a short dead zone between them: curl the corner, and then
+— if you keep pulling — the pair comes off the felt entirely and up in front of
+your face, where you can simply look at them.
+
+The dead zone matters. Without it, overshooting a peek would announce to the
+whole room that you were picking your hand up, and that is not a thing to do by
+accident. `HAND_LIFT.breakPixels` is the width of that decision.
+
+This is the loudest thing a player can do at this table, and deliberately so. At
+a real game, lifting your hole cards off the cloth is the move everybody notices
+and most rooms discourage. Here it is available, it works, and it is replicated
+as its own presence field — not folded into `peek`, because they are different
+acts and the table reads them differently. Certainty about your own hand, bought
+with the most conspicuous gesture in the game.
+
+Two details that took a moment to get right. The lean *backs off* as the cards
+rise, because bending toward the felt and holding cards up to your face are
+opposite movements. And the card transform is set absolutely rather than
+accumulated: `updatePoses` runs every frame, and a rotation that adds to itself
+sixty times a second is a card in orbit.
+
+Falling is ordered: a released hand comes down to the felt first and flattens
+onto it second, in the reverse of the order it went up.

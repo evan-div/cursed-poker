@@ -1,6 +1,7 @@
 import { CanvasTexture, LinearFilter, SRGBColorSpace, type Texture } from 'three';
 import { RANK_CHARS } from '@cursed/shared';
 import { ATLAS_COLUMNS, ATLAS_ROWS, BACK_CELL, BLANK_CELL, CELL } from './card-atlas.js';
+import { isCourt, pipsFor } from './card-pips.js';
 
 /**
  * Paints the card atlas.
@@ -71,46 +72,91 @@ function drawFace(
   roundedCard(ctx, x, y, FACE);
 
   const colour = RED_SUITS.has(suit) ? RED : INK;
-  const rankChar = RANK_CHARS[rank]!;
   const glyph = SUIT_GLYPHS[suit]!;
 
+  ctx.save();
+  ctx.translate(x, y);
   ctx.fillStyle = colour;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // Big suit through the middle, kept pale so the rank stays dominant.
-  ctx.globalAlpha = 0.16;
-  ctx.font = `${Math.round(CELL.height * 0.6)}px Georgia, serif`;
-  ctx.fillText(glyph, x + CELL.width / 2, y + CELL.height / 2 + 4);
-  ctx.globalAlpha = 1;
+  drawIndex(ctx, rank, glyph);
+  if (isCourt(rank)) drawCourt(ctx, rank, glyph);
+  else drawPips(ctx, rank, glyph);
 
-  /**
-   * An index in *every* corner, not the usual two.
-   *
-   * Four-index decks are a real thing, sold for exactly the situation this game
-   * is built around: reading a card you have only lifted the corner of. With
-   * the standard two, whether a peek shows you anything depends on which corner
-   * you happened to curl — half the time the index is on the part still lying
-   * flat on the felt, and you have bent your card in front of the whole table
-   * to learn nothing.
-   *
-   * Each is oriented to read upright from its own corner, so the card is the
-   * same either way up.
-   */
+  ctx.restore();
+}
+
+/**
+ * The corner index: rank above its suit, top-left, and again upside down at the
+ * bottom-right.
+ *
+ * Two, not four. An earlier version printed all four corners — four-index decks
+ * are real, and they made a peeked corner readable whichever one you lifted —
+ * but people have been reading this arrangement since they were children and
+ * notice instantly when a card is wrong. The peel is aimed at a corner that has
+ * an index instead.
+ */
+function drawIndex(ctx: CanvasRenderingContext2D, rank: number, glyph: string): void {
+  const rankChar = RANK_CHARS[rank]!;
   const corner = (cx: number, cy: number, flip: boolean) => {
     ctx.save();
-    ctx.translate(x + cx, y + cy);
+    ctx.translate(CELL.width * cx, CELL.height * cy);
     if (flip) ctx.rotate(Math.PI);
-    ctx.font = `bold ${Math.round(CELL.height * 0.3)}px Georgia, serif`;
+    ctx.font = `bold ${Math.round(CELL.height * 0.17)}px Georgia, serif`;
     ctx.fillText(rankChar, 0, 0);
-    ctx.font = `${Math.round(CELL.height * 0.22)}px Georgia, serif`;
-    ctx.fillText(glyph, 0, Math.round(CELL.height * 0.23));
+    ctx.font = `${Math.round(CELL.height * 0.115)}px Georgia, serif`;
+    ctx.fillText(glyph, 0, Math.round(CELL.height * 0.125));
     ctx.restore();
   };
-  corner(CELL.width * 0.21, CELL.height * 0.17, false);
-  corner(CELL.width * 0.79, CELL.height * 0.17, false);
-  corner(CELL.width * 0.21, CELL.height * 0.83, true);
-  corner(CELL.width * 0.79, CELL.height * 0.83, true);
+  corner(0.14, 0.115, false);
+  corner(0.86, 0.885, true);
+}
+
+/** The count, in the arrangement a printer would use. See `card-pips.ts`. */
+function drawPips(ctx: CanvasRenderingContext2D, rank: number, glyph: string): void {
+  // An ace gets one large pip; everything else gets its count at pip size.
+  const size = rank === 12 ? CELL.height * 0.34 : CELL.height * 0.155;
+  ctx.font = `${Math.round(size)}px Georgia, serif`;
+
+  for (const pip of pipsFor(rank)) {
+    ctx.save();
+    ctx.translate(CELL.width * pip.x, CELL.height * pip.y);
+    if (pip.inverted) ctx.rotate(Math.PI);
+    // Glyph metrics sit a shade high; nudged so a column of pips looks even.
+    ctx.fillText(glyph, 0, size * 0.04);
+    ctx.restore();
+  }
+}
+
+/**
+ * A court card.
+ *
+ * Deliberately a monogram rather than an attempt at the engraved figures: a
+ * procedurally drawn king is a bad king, and at the size a card appears across
+ * this table the letter is what anybody reads anyway. Two of them, one either
+ * way up, so the card stays symmetrical like the pip ranks.
+ */
+function drawCourt(ctx: CanvasRenderingContext2D, rank: number, glyph: string): void {
+  const rankChar = RANK_CHARS[rank]!;
+  const half = (flip: boolean) => {
+    ctx.save();
+    ctx.translate(CELL.width / 2, CELL.height / 2);
+    if (flip) ctx.rotate(Math.PI);
+    ctx.font = `bold ${Math.round(CELL.height * 0.2)}px Georgia, serif`;
+    ctx.fillText(rankChar, 0, -CELL.height * 0.15);
+    ctx.font = `${Math.round(CELL.height * 0.12)}px Georgia, serif`;
+    ctx.fillText(glyph, 0, -CELL.height * 0.03);
+    ctx.restore();
+  };
+  half(false);
+  half(true);
+
+  // A rule down the middle, the way a court card is mirrored about its waist.
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.fillRect(CELL.width * 0.2, CELL.height * 0.5 - 1, CELL.width * 0.6, 2);
+  ctx.restore();
 }
 
 function drawBack(ctx: CanvasRenderingContext2D, x: number, y: number): void {

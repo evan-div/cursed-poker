@@ -112,12 +112,15 @@ describe('the near edge comes up', () => {
 
 describe('one corner leads', () => {
   it('curls the leading corner further than the trailing one', () => {
-    const lead = peelPoint(LEAD_X, NEAR, 0, PEEK.maxLift).z;
-    const trail = peelPoint(TRAIL_X, NEAR, 0, PEEK.maxLift).z;
-    expect(lead).toBeGreaterThan(trail);
-    // But the trailing corner still moves — this is a diagonal fold, not a
-    // triangle torn off the side.
-    expect(trail).toBeGreaterThan(0);
+    // Measured as angle, not height. At a full fold the leading corner has
+    // rolled so far over that it comes back *down* past the trailing one, which
+    // is what a folded card does and is not the same as curling less.
+    expect(cornerBend(LEAD_X, PEEK.maxLift)).toBeGreaterThan(cornerBend(TRAIL_X, PEEK.maxLift));
+
+    // Both corners are off the felt — this is a diagonal fold, not a triangle
+    // torn off the side.
+    expect(peelPoint(LEAD_X, NEAR, 0, PEEK.maxLift).z).toBeGreaterThan(0);
+    expect(peelPoint(TRAIL_X, NEAR, 0, PEEK.maxLift).z).toBeGreaterThan(0);
     expect(CORNER_LEAD).toBeGreaterThan(0);
   });
 

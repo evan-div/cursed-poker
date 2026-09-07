@@ -1,4 +1,4 @@
-import { PEEK } from '@cursed/shared';
+import { HAND_LIFT, PEEK } from '@cursed/shared';
 
 /**
  * Lifting your own cards.
@@ -9,10 +9,17 @@ import { PEEK } from '@cursed/shared';
  * leaves it halfway — enough to read a rank, not enough to read a suit — and
  * that is a real choice, because everybody at the table can see the card move.
  *
+ * Keep pulling past a full curl and the gesture **breaks through**: the cards
+ * come off the felt entirely and up in front of your face, where you can simply
+ * look at them. That second stage is the loudest thing anybody can do at this
+ * table, and it is deliberately on the far side of a short dead zone, so it
+ * takes a decision rather than an overshoot.
+ *
  * The state machine is pure and frame-driven so the *feel* is testable: how far
- * a given pull lifts a card, how quickly a released card falls, and whether a
- * lift that never happened still reports zero. Anything that needs a DOM event
- * or a mesh lives in the controller that drives this.
+ * a given pull curls a card, where the break point sits, how quickly released
+ * cards fall, and whether a lift that never happened still reports zero.
+ * Anything that needs a DOM event or a mesh lives in the controller that drives
+ * this.
  */
 
 export interface PeekOptions {
@@ -33,6 +40,7 @@ export interface PeekOptions {
 
 export class PeekGesture {
   #exposure = 0;
+  #lift = 0;
   #holding = false;
   /** Pointer travel accumulated during the current hold, in pixels. */
   #pulled = 0;
@@ -48,9 +56,24 @@ export class PeekGesture {
     this.#unsteadiness = this.#options.unsteadiness;
   }
 
-  /** 0 flat on the felt, 1 fully lifted. */
+  /** 0 flat on the felt, 1 fully curled. */
   get exposure(): number {
     return this.#exposure;
+  }
+
+  /**
+   * 0 still on the table, 1 held up in front of the player's face.
+   *
+   * Only ever above zero once the curl is complete and the player has kept
+   * pulling through the break point.
+   */
+  get lift(): number {
+    return this.#lift;
+  }
+
+  /** True once the cards have left the felt. Everybody can see this. */
+  get lifted(): boolean {
+    return this.#lift > 0;
   }
 
   get holding(): boolean {
@@ -75,14 +98,14 @@ export class PeekGesture {
   begin(): void {
     if (this.#holding) return;
     this.#holding = true;
-    this.#pulled = this.#exposure * this.#travel();
+    this.#pulled = this.#pullFor(this.#exposure, this.#lift);
   }
 
   /** Pointer movement while held. Positive `dy` is toward the player. */
   move(dy: number): void {
     if (!this.#holding || !Number.isFinite(dy)) return;
-    this.#pulled = clamp(this.#pulled + dy, 0, this.#travel());
-    this.#exposure = this.#pulled / this.#travel();
+    this.#pulled = clamp(this.#pulled + dy, 0, this.#fullPull());
+    this.#applyPull();
   }
 
   release(): void {
@@ -90,9 +113,20 @@ export class PeekGesture {
     this.#pulled = 0;
   }
 
-  /** Lets a released card fall. Held cards stay exactly where they were put. */
+  /**
+   * Lets released cards fall. Held cards stay exactly where they were put.
+   *
+   * Raised cards come down first and then uncurl, in the order they went up: a
+   * hand returns to the felt before it flattens onto it.
+   */
   update(deltaSeconds: number): void {
-    if (this.#holding || this.#exposure === 0) return;
+    if (this.#holding) return;
+
+    if (this.#lift > 0) {
+      this.#lift = Math.max(0, this.#lift - HAND_LIFT.dropPerSecond * deltaSeconds);
+      return;
+    }
+    if (this.#exposure === 0) return;
     this.#exposure = Math.max(0, this.#exposure - this.#options.dropPerSecond * deltaSeconds);
   }
 
@@ -101,11 +135,36 @@ export class PeekGesture {
     this.#holding = false;
     this.#pulled = 0;
     this.#exposure = 0;
+    this.#lift = 0;
   }
 
   #travel(): number {
     // A steady hand needs the nominal travel; an unsteady one needs half again.
     return this.#options.travelPixels * (1 + this.#unsteadiness * 0.5);
+  }
+
+  /** Where the curl ends and the dead zone before picking the cards up begins. */
+  #breakPoint(): number {
+    return this.#travel() + HAND_LIFT.breakPixels;
+  }
+
+  /** Total pull available: curl, then the break, then the raise. */
+  #fullPull(): number {
+    return this.#breakPoint() + HAND_LIFT.travelPixels;
+  }
+
+  #applyPull(): void {
+    const curl = this.#travel();
+    this.#exposure = clamp(this.#pulled / curl, 0, 1);
+    // The dead zone between the two: the curl is complete and the cards have
+    // not moved yet, so breaking through is something a player does on purpose.
+    this.#lift = clamp((this.#pulled - this.#breakPoint()) / HAND_LIFT.travelPixels, 0, 1);
+  }
+
+  /** The inverse, so re-grabbing resumes from where the cards actually are. */
+  #pullFor(exposure: number, lift: number): number {
+    if (lift > 0) return this.#breakPoint() + lift * HAND_LIFT.travelPixels;
+    return exposure * this.#travel();
   }
 }
 

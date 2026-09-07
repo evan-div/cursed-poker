@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PEEK, quantisePeek } from '@cursed/shared';
+import { HAND_LIFT, PEEK, quantisePeek } from '@cursed/shared';
 import { PeekGesture, liftAngle } from './peek.js';
 
 /**
@@ -114,6 +114,113 @@ describe('lifting a card', () => {
     peek.reset();
     expect(peek.exposure).toBe(0);
     expect(peek.holding).toBe(false);
+  });
+});
+
+describe('pulling the cards off the table', () => {
+  const CURL = 100;
+  const gesture = () => new PeekGesture({ travelPixels: CURL });
+
+  it('stays on the felt for a normal peek', () => {
+    const peek = gesture();
+    peek.begin();
+    peek.move(CURL);
+    expect(peek.exposure).toBe(1);
+    expect(peek.lift).toBe(0);
+    expect(peek.lifted).toBe(false);
+  });
+
+  it('needs a deliberate push past the curl before anything leaves the table', () => {
+    // A dead zone, so overshooting a peek does not accidentally announce to the
+    // whole room that you are picking your hand up.
+    const peek = gesture();
+    peek.begin();
+    peek.move(CURL + HAND_LIFT.breakPixels - 1);
+    expect(peek.lifted).toBe(false);
+
+    peek.move(2);
+    expect(peek.lifted).toBe(true);
+  });
+
+  it('raises them the further you keep pulling, and stops', () => {
+    const peek = gesture();
+    peek.begin();
+    peek.move(CURL + HAND_LIFT.breakPixels);
+
+    let previous = -1;
+    for (let extra = 0; extra <= HAND_LIFT.travelPixels; extra += HAND_LIFT.travelPixels / 8) {
+      expect(peek.lift).toBeGreaterThanOrEqual(previous);
+      previous = peek.lift;
+      peek.move(HAND_LIFT.travelPixels / 8);
+    }
+    expect(peek.lift).toBe(1);
+
+    peek.move(10_000);
+    expect(peek.lift).toBe(1);
+    expect(peek.exposure).toBe(1);
+  });
+
+  it('keeps the curl underneath: a raised hand is a peeked one, continued', () => {
+    const peek = gesture();
+    peek.begin();
+    peek.move(CURL + HAND_LIFT.breakPixels + HAND_LIFT.travelPixels);
+    expect(peek.exposure).toBe(1);
+    expect(peek.lift).toBe(1);
+  });
+
+  it('pushing back down puts them on the table before it flattens them', () => {
+    const peek = gesture();
+    peek.begin();
+    peek.move(CURL + HAND_LIFT.breakPixels + HAND_LIFT.travelPixels);
+
+    peek.move(-HAND_LIFT.travelPixels);
+    expect(peek.lift).toBe(0);
+    expect(peek.exposure).toBe(1);
+
+    peek.move(-HAND_LIFT.breakPixels - CURL);
+    expect(peek.exposure).toBe(0);
+  });
+
+  it('comes down before it uncurls when released', () => {
+    const peek = new PeekGesture({ travelPixels: CURL, dropPerSecond: 5 });
+    peek.begin();
+    peek.move(CURL + HAND_LIFT.breakPixels + HAND_LIFT.travelPixels);
+    peek.release();
+
+    // Falling: the hand returns to the felt first and stays curled while it does.
+    peek.update(0.1);
+    expect(peek.lift).toBeLessThan(1);
+    expect(peek.exposure).toBe(1);
+
+    peek.update(1);
+    expect(peek.lift).toBe(0);
+    expect(peek.exposure).toBe(1);
+
+    // Only then does the card flatten out.
+    peek.update(0.5);
+    expect(peek.exposure).toBe(0);
+  });
+
+  it('resumes a re-grab from wherever the cards actually are', () => {
+    const peek = gesture();
+    peek.begin();
+    peek.move(CURL + HAND_LIFT.breakPixels + HAND_LIFT.travelPixels / 2);
+    const held = peek.lift;
+    peek.release();
+
+    peek.begin();
+    peek.move(0);
+    expect(peek.lift).toBeCloseTo(held, 9);
+  });
+
+  it('puts everything back on a reset', () => {
+    const peek = gesture();
+    peek.begin();
+    peek.move(10_000);
+    peek.reset();
+    expect(peek.lift).toBe(0);
+    expect(peek.exposure).toBe(0);
+    expect(peek.lifted).toBe(false);
   });
 });
 

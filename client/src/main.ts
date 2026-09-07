@@ -212,7 +212,10 @@ function renderTable(current: ClientView): void {
 
     scene = new GameScene(canvas, {
       onFirstLook: () => void requestPeek(),
-      onExposure: (exposure) => reporter.setPeek(exposure),
+      onExposure: (exposure, lift) => {
+        reporter.setPeek(exposure);
+        reporter.setLift(lift);
+      },
       onGaze: (target: GazeTarget) => reporter.setGaze(target),
     });
     nameplates = new Nameplates();

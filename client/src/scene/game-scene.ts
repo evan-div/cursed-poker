@@ -24,8 +24,8 @@ import { POT_POSITION, RADIUS, seatPoint } from './layout.js';
 export interface GameSceneHooks {
   /** The player started lifting their cards: ask the server for them. */
   onFirstLook: () => void;
-  /** Their exposure changed, for reporting to the table. */
-  onExposure: (exposure: number) => void;
+  /** Their curl or raise changed, for reporting to the table. */
+  onExposure: (exposure: number, lift: number) => void;
   /** They are now looking at something different. */
   onGaze: (target: GazeTarget) => void;
 }
@@ -85,12 +85,14 @@ export class GameScene {
     this.#canvas = canvas;
     this.peek = new CardPeekController({
       onFirstLook: hooks.onFirstLook,
-      onExposure: (exposure) => {
-        hooks.onExposure(exposure);
-        this.#cards.setLocalPeek(this.#seatIndex ?? null, exposure);
-        // Lifting a card brings your head down to it, which is most of how a
+      onExposure: (exposure, lift) => {
+        hooks.onExposure(exposure, lift);
+        this.#cards.setLocalPeek(this.#seatIndex ?? null, exposure, lift);
+        // Curling a card brings your head down to it, which is most of how a
         // corner index becomes readable across half a metre of dark table.
-        this.seated.setPeekLean(exposure);
+        // Picking the cards up does the opposite — they come to you — so the
+        // lean backs off as they rise.
+        this.seated.setPeekLean(exposure * (1 - lift));
       },
     });
 
@@ -152,12 +154,14 @@ export class GameScene {
         me: {
           seat: this.#seatIndex ?? null,
           peek: this.peek.exposure,
+          lift: this.peek.lift,
           lean: this.seated.lean,
           gaze: this.seated.gaze,
         },
         table: (this.#lastPresence?.seats ?? []).map((seat) => ({
           seat: seat.seatIndex,
           peek: seat.peek,
+          lift: seat.lift,
           lean: seat.lean,
           gaze: seat.gaze,
           stillMs: seat.stillMs,
@@ -201,7 +205,7 @@ export class GameScene {
     if (handNumber !== this.#handNumber) {
       this.#handNumber = handNumber;
       this.peek.reset();
-      this.#cards.setLocalPeek(this.#seatIndex ?? null, 0);
+      this.#cards.setLocalPeek(this.#seatIndex ?? null, 0, 0);
     }
 
     this.#applyAvatars(view);
@@ -221,7 +225,7 @@ export class GameScene {
       // echo of it arriving 80ms later.
       if (seat.seatIndex === this.#seatIndex) continue;
       avatar.setGaze(seat.gaze);
-      avatar.setPeek(seat.peek);
+      avatar.setPeek(Math.max(seat.peek, seat.lift));
       avatar.setLean(seat.lean);
     }
   }

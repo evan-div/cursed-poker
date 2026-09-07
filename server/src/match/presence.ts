@@ -34,6 +34,8 @@ export interface SeatPresenceRecord {
   gaze: GazeTarget;
   /** Last reported exposure, before decay. */
   peek: number;
+  /** How far the cards have been picked up off the table, before decay. */
+  lift: number;
   /** How far they are leaning in over the table, before decay. */
   lean: number;
   handlingChips: boolean;
@@ -83,6 +85,7 @@ function blank(seatIndex: number, now: number): SeatPresenceRecord {
     seatIndex,
     gaze: GAZE_AWAY,
     peek: 0,
+    lift: 0,
     lean: 0,
     handlingChips: false,
     lastMovedAt: now,
@@ -123,6 +126,7 @@ export function reportPresence(
 ): void {
   const record = seatPresence(presence, seatIndex, now);
   const peek = clamp01(input.peek);
+  const lift = clamp01(input.lift);
   const lean = clamp01(input.lean);
 
   if (record.peek > 0 && now > record.lastReportAt) {
@@ -137,11 +141,13 @@ export function reportPresence(
   const moved =
     !gazeEquals(record.gaze, input.gaze) ||
     Math.abs(record.peek - peek) > VISIBLE_MOVEMENT ||
+    Math.abs(record.lift - lift) > VISIBLE_MOVEMENT ||
     Math.abs(record.lean - lean) > VISIBLE_MOVEMENT ||
     record.handlingChips !== input.handlingChips;
 
   record.gaze = input.gaze;
   record.peek = peek;
+  record.lift = lift;
   record.lean = lean;
   record.handlingChips = input.handlingChips;
   record.lastReportAt = now;
@@ -190,6 +196,7 @@ export function resetForHand(presence: PresenceState, now: number): void {
     record.peeksThisHand = 0;
     record.peekMsThisHand = 0;
     record.peek = 0;
+    record.lift = 0;
     record.lastReportAt = now;
   }
 }
@@ -228,6 +235,7 @@ export function projectPresence(
         seatIndex,
         gaze: GAZE_AWAY,
         peek: 0,
+        lift: 0,
         lean: 0,
         handlingChips: false,
         stillMs: 0,
@@ -246,6 +254,7 @@ export function projectPresence(
       seatIndex,
       gaze: record.gaze,
       peek: present ? quantisePeek(record.peek * decay) : 0,
+      lift: present ? quantisePeek(record.lift * decay) : 0,
       lean: present ? quantisePeek(record.lean * decay) : 0,
       handlingChips: present && record.handlingChips && decay > 0,
       stillMs: Math.max(0, now - record.lastMovedAt),

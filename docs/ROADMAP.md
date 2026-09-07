@@ -147,6 +147,15 @@ phase's three real bugs were invisible in a screenshot.
       reaches nearly twice as far as leaning at the board
 - [x] Bigger cards in the activity log
 
+### Fourth round (307 tests)
+
+- [x] **Real card faces**: two corner indices and the standard pip layouts, not
+      the four-index deck that solved the peeking problem and looked wrong
+- [x] Court cards as a monogram — a procedurally drawn king is a bad king
+- [x] **Pulling past a full curl picks the cards up off the table**, through a
+      short dead zone so it is never an overshoot. Replicated as its own field:
+      it is the most conspicuous thing anybody can do at this table
+
 ---
 
 ## Phase 5 — The Dealer and atmosphere
