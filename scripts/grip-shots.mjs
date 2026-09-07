@@ -58,14 +58,19 @@ await look(0, 130);
 await me.waitForSelector('.hud-hint .hint-strong', { timeout: 90_000 });
 
 // Peel, then keep pulling past the break so the pair leaves the felt.
-await me.mouse.move(640, 440);
+//
+// The whole drag starts near the top of the window, because a full pull is
+// most of five hundred pixels and a gesture that runs off the bottom edge
+// stops being delivered part way down — which looks exactly like a peek that
+// will not break through, and cost an afternoon once.
+await me.mouse.move(640, 170);
 await me.mouse.down({ button: 'right' });
-for (let i = 1; i <= 14; i++) await me.mouse.move(640, 440 + (150 * i) / 14);
+for (let i = 1; i <= 14; i++) await me.mouse.move(640, 170 + (150 * i) / 14);
 await me.waitForTimeout(400);
 await me.screenshot({ path: `${OUT}/peeling.png` });
 console.log('peeling:', JSON.stringify(await me.evaluate(() => window.__bodies().me)));
 
-for (let i = 1; i <= 20; i++) await me.mouse.move(640, 590 + (260 * i) / 20);
+for (let i = 1; i <= 20; i++) await me.mouse.move(640, 320 + (400 * i) / 20);
 await me.waitForTimeout(700);
 await me.screenshot({ path: `${OUT}/lifted-own-eyes.png` });
 console.log('lifted:', JSON.stringify(await me.evaluate(() => window.__bodies().me)));
