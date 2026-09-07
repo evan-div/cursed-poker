@@ -146,10 +146,16 @@ export class GameScene {
       // ask "did the table actually see that?" from the outside.
       (window as unknown as { __bodies?: unknown }).__bodies = () => ({
         frameAgeMs: this.#lastPresence ? Date.now() - this.#lastPresence.serverTime : null,
-        me: { seat: this.#seatIndex ?? null, peek: this.peek.exposure, gaze: this.seated.gaze },
+        me: {
+          seat: this.#seatIndex ?? null,
+          peek: this.peek.exposure,
+          lean: this.seated.lean,
+          gaze: this.seated.gaze,
+        },
         table: (this.#lastPresence?.seats ?? []).map((seat) => ({
           seat: seat.seatIndex,
           peek: seat.peek,
+          lean: seat.lean,
           gaze: seat.gaze,
           stillMs: seat.stillMs,
           present: seat.present,
@@ -213,6 +219,7 @@ export class GameScene {
       if (seat.seatIndex === this.#seatIndex) continue;
       avatar.setGaze(seat.gaze);
       avatar.setPeek(seat.peek);
+      avatar.setLean(seat.lean);
     }
   }
 

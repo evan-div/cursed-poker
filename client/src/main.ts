@@ -8,7 +8,7 @@ import {
   type SessionGrant,
 } from '@cursed/shared';
 import { GameConnection } from './net.js';
-import { describeEvent } from './narration.js';
+import { describeEvent, type LogLine } from './narration.js';
 import { GameScene } from './scene/game-scene.js';
 import { PresenceReporter } from './interaction/presence-reporter.js';
 import { el } from './ui/dom.js';
@@ -33,7 +33,7 @@ const app = document.querySelector<HTMLElement>('#app')!;
 const connection = new GameConnection();
 
 let view: ClientView | null = null;
-let log: string[] = [];
+let log: LogLine[] = [];
 let banner: { text: string; kind: 'error' | 'info' } | null = null;
 let connected = false;
 /** Local echo so a click cannot be sent twice while the next view is in flight. */
@@ -308,7 +308,10 @@ function bannerElement(current: { text: string; kind: string }): HTMLElement {
  * they are not actually giving. What the rest of the room learns about your body
  * should not depend on your graphics card.
  */
-setInterval(() => reporter.update(performance.now()), Math.round(1000 / PRESENCE.clientHz));
+setInterval(() => {
+  if (scene) reporter.setLean(scene.seated.lean);
+  reporter.update(performance.now());
+}, Math.round(1000 / PRESENCE.clientHz));
 
 // The blind clock ticks once a second. It updates in place rather than
 // re-rendering, so a countdown cannot pull a button out from under a click.

@@ -355,6 +355,7 @@ describe('bodies over the wire', () => {
         await emit(mover.socket, 'player:presence', {
           gaze: { kind: 'SEAT', seatIndex: 0 },
           peek: 0.5,
+          lean: 0,
           handlingChips: true,
         })
       ).ok,
@@ -379,6 +380,7 @@ describe('bodies over the wire', () => {
       'gaze',
       'kind',
       'peek',
+      'lean',
       'handlingChips',
       'stillMs',
       'present',
@@ -412,6 +414,7 @@ describe('bodies over the wire', () => {
         emit(spammer.socket, 'player:presence', {
           gaze: { kind: 'AWAY' },
           peek: 0,
+          lean: 0,
           handlingChips: false,
         }).catch(() => ({ ok: false, code: 'TIMEOUT' })),
       ),
@@ -425,10 +428,11 @@ describe('bodies over the wire', () => {
   it('refuses a malformed body report', async () => {
     const group = await openLobby(4);
     for (const payload of [
-      { gaze: { kind: 'SEAT', seatIndex: 99 }, peek: 0, handlingChips: false },
-      { gaze: { kind: 'NOWHERE' }, peek: 0, handlingChips: false },
-      { gaze: { kind: 'AWAY' }, peek: 4, handlingChips: false },
-      { gaze: { kind: 'AWAY' }, peek: 0 },
+      { gaze: { kind: 'SEAT', seatIndex: 99 }, peek: 0, lean: 0, handlingChips: false },
+      { gaze: { kind: 'NOWHERE' }, peek: 0, lean: 0, handlingChips: false },
+      { gaze: { kind: 'AWAY' }, peek: 4, lean: 0, handlingChips: false },
+      { gaze: { kind: 'AWAY' }, peek: 0, lean: 2, handlingChips: false },
+      { gaze: { kind: 'AWAY' }, peek: 0, lean: 0 },
     ]) {
       expect(await emit(group[0]!.socket, 'player:presence', payload)).toMatchObject({
         ok: false,

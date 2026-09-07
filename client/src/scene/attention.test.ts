@@ -23,14 +23,44 @@ describe('the pull', () => {
   });
 
   it('never closes the whole gap, however long it runs', () => {
-    const attention = new AttentionDirector();
+    // The bug this replaces: the bias moved a fraction of the *remaining* gap
+    // each frame, which converges on the target. A player sitting still for a
+    // second ended up staring straight at whoever had acted, and while peeking
+    // they could not even fight it. Run it long past the point where the old
+    // version had arrived.
+    const attention = new AttentionDirector({ maxClose: 0.62 });
     let yaw = 0;
-    for (let t = 0; t < 1_300; t += 16) {
+    for (let t = 0; t < 10_000; t += 16) {
       attention.focus(1, 0, ATTENTION_WEIGHT.reckoning, T0 + t, 1_400);
       yaw += attention.step(yaw, 0, 0.016, T0 + t).yaw;
     }
     expect(yaw).toBeGreaterThan(0.2);
-    expect(yaw).toBeLessThan(1);
+    expect(yaw).toBeLessThanOrEqual(0.62 + 1e-6);
+  });
+
+  it('nudges by a share of the angle, whatever the frame rate', () => {
+    // A slow client must not get a *stronger* pull than a fast one just because
+    // its frames are further apart. This one runs at three frames a second.
+    const attention = new AttentionDirector({ maxClose: 0.62 });
+    let yaw = 0;
+    for (let t = 0; t < 10_000; t += 333) {
+      attention.focus(1, 0, ATTENTION_WEIGHT.reckoning, T0 + t, 1_400);
+      yaw += attention.step(yaw, 0, 0.333, T0 + t).yaw;
+    }
+    expect(yaw).toBeLessThanOrEqual(0.62 + 1e-6);
+  });
+
+  it('measures its reach from where the head actually was', () => {
+    // Already halfway there: the pull may only close part of what is left, not
+    // drag the head back out to a fixed fraction of some absolute angle.
+    const attention = new AttentionDirector({ maxClose: 0.5 });
+    let yaw = 0.8;
+    for (let t = 0; t < 5_000; t += 16) {
+      attention.focus(1, 0, 1, T0 + t, 1_400);
+      yaw += attention.step(yaw, 0, 0.016, T0 + t).yaw;
+    }
+    expect(yaw).toBeGreaterThan(0.8);
+    expect(yaw).toBeLessThanOrEqual(0.9 + 1e-6); // 0.8 + half of the remaining 0.2
   });
 
   it('turns a head no faster than a neck could', () => {

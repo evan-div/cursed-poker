@@ -34,6 +34,8 @@ export interface SeatPresenceRecord {
   gaze: GazeTarget;
   /** Last reported exposure, before decay. */
   peek: number;
+  /** How far they are leaning in over the table, before decay. */
+  lean: number;
   handlingChips: boolean;
   /** Epoch ms of the last report that actually changed something. */
   lastMovedAt: number;
@@ -81,6 +83,7 @@ function blank(seatIndex: number, now: number): SeatPresenceRecord {
     seatIndex,
     gaze: GAZE_AWAY,
     peek: 0,
+    lean: 0,
     handlingChips: false,
     lastMovedAt: now,
     lastReportAt: now,
@@ -120,6 +123,7 @@ export function reportPresence(
 ): void {
   const record = seatPresence(presence, seatIndex, now);
   const peek = clamp01(input.peek);
+  const lean = clamp01(input.lean);
 
   if (record.peek > 0 && now > record.lastReportAt) {
     // Time spent lifted, integrated between reports. Phase 6 reads it; nobody
@@ -133,10 +137,12 @@ export function reportPresence(
   const moved =
     !gazeEquals(record.gaze, input.gaze) ||
     Math.abs(record.peek - peek) > VISIBLE_MOVEMENT ||
+    Math.abs(record.lean - lean) > VISIBLE_MOVEMENT ||
     record.handlingChips !== input.handlingChips;
 
   record.gaze = input.gaze;
   record.peek = peek;
+  record.lean = lean;
   record.handlingChips = input.handlingChips;
   record.lastReportAt = now;
   if (moved) record.lastMovedAt = now;
@@ -222,6 +228,7 @@ export function projectPresence(
         seatIndex,
         gaze: GAZE_AWAY,
         peek: 0,
+        lean: 0,
         handlingChips: false,
         stillMs: 0,
         present,
@@ -239,6 +246,7 @@ export function projectPresence(
       seatIndex,
       gaze: record.gaze,
       peek: present ? quantisePeek(record.peek * decay) : 0,
+      lean: present ? quantisePeek(record.lean * decay) : 0,
       handlingChips: present && record.handlingChips && decay > 0,
       stillMs: Math.max(0, now - record.lastMovedAt),
       present,

@@ -65,8 +65,14 @@ export const PEEK = {
    * that reading a rank takes a deliberate movement rather than a twitch.
    */
   travelPixels: 190,
-  /** How far the near edge of a card lifts at full exposure, in radians. */
-  maxLift: 1.15,
+  /**
+   * How far the near edge of a card has bent at full exposure, in radians.
+   *
+   * Past a right angle on purpose. Hole cards lie face down, so the underside
+   * has to come round past vertical before its owner can read anything off it;
+   * anything less and a full peek shows you the edge of your own card.
+   */
+  maxLift: 2.0,
   /** Exposure at which a rank becomes readable; below this it is a corner. */
   rankVisibleAt: 0.34,
   /** How quickly a released card falls back to the felt, in exposure per second. */
@@ -89,6 +95,29 @@ export const PEEK = {
  * bug this comment exists to prevent a second time. `presence.test.ts` asserts
  * the margin so the constants cannot drift apart quietly.
  */
+/**
+ * Leaning in over the table.
+ *
+ * The board is small, dim and two feet away, so players need a way to look
+ * closer. Making that a free camera zoom would have been simpler and wrong: it
+ * would let somebody study an opponent's hands from across the room at no cost,
+ * in a game whose whole premise is that looking is something other people can
+ * see you do.
+ *
+ * So it is a lean. The camera moves over the table and the view narrows, and
+ * the rest of the room watches you do it.
+ */
+export const LEAN = {
+  /** Field of view when sitting back, in degrees. */
+  restFov: 58,
+  /** Field of view fully leaned in. */
+  closeFov: 30,
+  /** How far the head travels over the table, in metres. */
+  reach: 0.13,
+  /** Wheel travel, in pixels, from sitting back to fully leaned in. */
+  travelPixels: 320,
+} as const;
+
 export const PRESENCE = {
   /** How often a client may report its own body. */
   clientHz: 15,
@@ -125,6 +154,8 @@ export interface PresenceInput {
   gaze: GazeTarget;
   /** How far this player has lifted their own cards, 0..1. */
   peek: number;
+  /** How far they are leaning in over the table, 0..1. */
+  lean: number;
   /** True while they are handling chips — sizing a bet, reaching for a stack. */
   handlingChips: boolean;
 }
@@ -141,6 +172,8 @@ export interface SeatPresence {
   gaze: GazeTarget;
   /** How far their cards are lifted. Never what is on them. */
   peek: number;
+  /** How far they are leaning in over the table. */
+  lean: number;
   handlingChips: boolean;
   /**
    * How long this seat has been completely motionless, in milliseconds.

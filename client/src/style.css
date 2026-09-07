@@ -129,6 +129,25 @@ input[type="range"] { padding: 0; accent-color: var(--brass); }
 .hud-log .log li:first-child { color: var(--ink); border-left-color: var(--blood); }
 
 /*
+ * Cards inside a log line.
+ *
+ * A reference to a card, not a picture of one — the real cards are on the
+ * table, and anything more detailed here would compete with them.
+ */
+.chip-card {
+  display: inline-flex; align-items: center; gap: 1px;
+  padding: 1px 3px; margin: 0 1px; vertical-align: -1px;
+  background: #ddd6c9; color: #14100e;
+  border: 1px solid #a89f91; border-radius: 2px;
+  font-family: Georgia, serif; line-height: 1;
+}
+.chip-card b { font-size: 11px; font-weight: 700; }
+.chip-card i { font-size: 10px; font-style: normal; }
+.chip-card.hearts, .chip-card.diamonds { color: #9c2018; }
+/* The most recent line is the bright one; older cards recede with it. */
+.hud-log .log li:not(:first-child) .chip-card { opacity: 0.72; }
+
+/*
  * The peek prompt, where the card readout used to be.
  *
  * Phase 3 printed the player's own hand in this corner. Phase 4 took it away:

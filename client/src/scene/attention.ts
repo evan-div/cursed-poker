@@ -22,6 +22,15 @@ export interface AttentionPull {
   pitch: number;
   /** 0..1. How hard the game is pulling, which decays over the event's life. */
   weight: number;
+  /**
+   * Where the player's head was aimed when this pull started.
+   *
+   * Kept so the bias can be bounded by *total* displacement rather than by
+   * speed. Nudging a fraction of the remaining gap every frame is not a nudge:
+   * over a second it arrives, and the head ends up locked onto whoever acted.
+   */
+  fromYaw: number | null;
+  fromPitch: number | null;
   /** Epoch ms when this pull began. */
   startedAt: number;
   /** Epoch ms after which this pull is over. */
@@ -100,10 +109,25 @@ export class AttentionDirector {
   focus(yaw: number, pitch: number, weight: number, now: number, durationMs = 1_400): void {
     if (weight <= 0) return;
     if (this.#pull && now < this.#pull.until && this.#pull.weight > weight) return;
+
+    // Asking for attention on the subject already being watched extends the
+    // moment; it does not start a new one. Otherwise each repeat re-measures
+    // its reach from wherever the last one left the head, and a subject that
+    // keeps asking walks the player onto it a fraction at a time — which is the
+    // unbounded lock this whole mechanism exists to avoid.
+    const live = this.#pull;
+    if (live && now < live.until && live.yaw === yaw && live.pitch === pitch) {
+      live.until = now + Math.max(1, durationMs);
+      return;
+    }
+
     this.#pull = {
       yaw,
       pitch,
       weight: Math.min(weight, 1),
+      // Filled in on the first frame, when the player's actual aim is known.
+      fromYaw: null,
+      fromPitch: null,
       startedAt: now,
       until: now + Math.max(1, durationMs),
     };
@@ -130,8 +154,14 @@ export class AttentionDirector {
   /**
    * How far the head should drift this frame.
    *
-   * Returns the delta to add to the player's own look target, already clamped to
-   * a believable turning speed. Zero when suppressed, expired, or already there.
+   * Returns the delta to add to the player's own look target, bounded two ways:
+   * by a believable turning speed, and — the one that matters — by how far this
+   * pull is allowed to move the head *in total*. It aims at a point a fraction
+   * of the way toward the subject and stops there. Getting this wrong is not
+   * subtle: an unbounded nudge is a camera lock with extra steps, and it made
+   * players stare at their neighbours while trying to look at their own cards.
+   *
+   * Zero when suppressed, expired, or already there.
    */
   step(
     currentYaw: number,
@@ -150,18 +180,26 @@ export class AttentionDirector {
       return none;
     }
 
-    // The pull fades over its own lifetime, so attention arrives as a nudge and
+    // Where the head was when this started, so the bound is measured from there.
+    pull.fromYaw ??= currentYaw;
+    pull.fromPitch ??= currentPitch;
+
+    // As far as this pull is ever allowed to turn the head: part of the way,
+    // never all of it. You finish the movement, or you do not, and either way
+    // it was you.
+    const reach = this.#options.maxClose * pull.weight;
+    const wantedYaw = pull.fromYaw + (pull.yaw - pull.fromYaw) * reach;
+    const wantedPitch = pull.fromPitch + (pull.pitch - pull.fromPitch) * reach;
+
+    // Eased out over the pull's life, so attention arrives as a drift and
     // leaves without a snap.
     const remaining = (pull.until - now) / (pull.until - pull.startedAt);
-    const strength = pull.weight * clamp01(remaining);
-
-    const close = this.#options.maxClose * strength;
-    const gain = clamp01(this.#options.gainPerSecond * deltaSeconds);
+    const gain = clamp01(this.#options.gainPerSecond * deltaSeconds) * clamp01(remaining);
     const cap = this.#options.maxRadiansPerSecond * deltaSeconds;
 
     return {
-      yaw: limit((pull.yaw - currentYaw) * close * gain, cap),
-      pitch: limit((pull.pitch - currentPitch) * close * gain, cap),
+      yaw: limit((wantedYaw - currentYaw) * gain, cap),
+      pitch: limit((wantedPitch - currentPitch) * gain, cap),
     };
   }
 }

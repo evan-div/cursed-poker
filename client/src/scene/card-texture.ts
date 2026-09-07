@@ -84,19 +84,33 @@ function drawFace(
   ctx.fillText(glyph, x + CELL.width / 2, y + CELL.height / 2 + 4);
   ctx.globalAlpha = 1;
 
-  // Corner index, and the same again rotated, as a real card has.
+  /**
+   * An index in *every* corner, not the usual two.
+   *
+   * Four-index decks are a real thing, sold for exactly the situation this game
+   * is built around: reading a card you have only lifted the corner of. With
+   * the standard two, whether a peek shows you anything depends on which corner
+   * you happened to curl — half the time the index is on the part still lying
+   * flat on the felt, and you have bent your card in front of the whole table
+   * to learn nothing.
+   *
+   * Each is oriented to read upright from its own corner, so the card is the
+   * same either way up.
+   */
   const corner = (cx: number, cy: number, flip: boolean) => {
     ctx.save();
     ctx.translate(x + cx, y + cy);
     if (flip) ctx.rotate(Math.PI);
-    ctx.font = `bold ${Math.round(CELL.height * 0.21)}px Georgia, serif`;
+    ctx.font = `bold ${Math.round(CELL.height * 0.23)}px Georgia, serif`;
     ctx.fillText(rankChar, 0, 0);
-    ctx.font = `${Math.round(CELL.height * 0.15)}px Georgia, serif`;
-    ctx.fillText(glyph, 0, Math.round(CELL.height * 0.16));
+    ctx.font = `${Math.round(CELL.height * 0.17)}px Georgia, serif`;
+    ctx.fillText(glyph, 0, Math.round(CELL.height * 0.18));
     ctx.restore();
   };
-  corner(CELL.width * 0.19, CELL.height * 0.15, false);
-  corner(CELL.width * 0.81, CELL.height * 0.85, true);
+  corner(CELL.width * 0.18, CELL.height * 0.15, false);
+  corner(CELL.width * 0.82, CELL.height * 0.15, false);
+  corner(CELL.width * 0.18, CELL.height * 0.85, true);
+  corner(CELL.width * 0.82, CELL.height * 0.85, true);
 }
 
 function drawBack(ctx: CanvasRenderingContext2D, x: number, y: number): void {

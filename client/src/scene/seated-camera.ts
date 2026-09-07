@@ -1,5 +1,5 @@
 import { PerspectiveCamera, Vector3 } from 'three';
-import type { GazeTarget } from '@cursed/shared';
+import { LEAN, gazeEquals, type GazeTarget } from '@cursed/shared';
 import { AttentionDirector } from './attention.js';
 import { resolveGaze } from './gaze.js';
 import { LOOK_LIMITS, REST_PITCH, clamp, seatedView, type Vec3 } from './layout.js';
@@ -25,6 +25,15 @@ import { LOOK_LIMITS, REST_PITCH, clamp, seatedView, type Vec3 } from './layout.
  * over mid-drift is seamless — and moving the mouse at all cancels it outright.
  * See `attention.ts` for why that surrender is the important half.
  */
+/**
+ * How long a look must hold before the table is told about it.
+ *
+ * Long enough that glancing past somebody is not reported, short enough that
+ * deliberately checking an opponent still registers well inside the time it
+ * takes them to act.
+ */
+export const GAZE_DWELL_MS = 220;
+
 export class SeatedCamera {
   readonly camera: PerspectiveCamera;
   readonly attention = new AttentionDirector();
@@ -51,9 +60,17 @@ export class SeatedCamera {
   #targetYaw = 0;
   #targetPitch = REST_PITCH;
 
+  #seat = { x: 0, y: 0, z: 0 };
+  #lean = 0;
+  #shownLean = -1;
+  #leanYaw = 0;
+  #leanPitch = 0;
+  #aspect: number;
   #seatIndex: number | null = null;
   #seats: readonly number[] = [];
   #gaze: GazeTarget = { kind: 'AWAY' };
+  #candidate: GazeTarget = { kind: 'AWAY' };
+  #candidateSince = 0;
   #forward = new Vector3();
 
   #dragging = false;
@@ -64,17 +81,53 @@ export class SeatedCamera {
   #detach: (() => void) | null = null;
 
   constructor(aspect: number) {
-    this.camera = new PerspectiveCamera(58, aspect, 0.02, 40);
+    this.#aspect = aspect;
+    this.camera = new PerspectiveCamera(LEAN.restFov, aspect, 0.02, 40);
   }
 
   /** Moves to a seat. Passing null seats the viewer in the Dealer's place. */
   sitAt(seatIndex: number | null): void {
     const seat = seatedView(seatIndex);
-    this.camera.position.set(seat.position.x, seat.position.y, seat.position.z);
+    this.#seat = { ...seat.position };
     this.#baseYaw = seat.yaw;
     this.#seatIndex = seatIndex;
+    this.#lean = 0;
+    // Forces the move to actually happen. `#applyLean` skips its work when the
+    // lean has not changed, which is right every frame and catastrophic here:
+    // sitting down at a new seat with the same posture left the camera at the
+    // old one, facing the new one's direction. You looked out of your own head
+    // from somebody else's chair.
+    this.#shownLean = -1;
     this.attention.clear();
+    this.#applyLean();
     this.#applyRotation();
+  }
+
+  /**
+   * How far the player is leaning over the table, 0..1.
+   *
+   * Public because it is replicated: leaning in to study the board is something
+   * the rest of the room can see you do, which is the whole reason this is a
+   * lean rather than a camera zoom.
+   */
+  get lean(): number {
+    return this.#lean;
+  }
+
+  /** Sets the posture directly. The wheel is the player-facing way in. */
+  leanTo(amount: number): void {
+    this.#lean = clamp(amount, 0, 1);
+    this.#applyLean();
+  }
+
+  /** Aims the head directly, without easing. Dragging is the way in for players. */
+  lookAt(yaw: number, pitch: number): void {
+    this.#targetYaw = clamp(yaw, -LOOK_LIMITS.yaw, LOOK_LIMITS.yaw);
+    this.#targetPitch = clamp(pitch, LOOK_LIMITS.pitchDown, LOOK_LIMITS.pitchUp);
+    this.#yaw = this.#targetYaw;
+    this.#pitch = this.#targetPitch;
+    this.#applyRotation();
+    this.#applyLean();
   }
 
   /** The seats currently occupied, so a look can land on one. */
@@ -115,6 +168,11 @@ export class SeatedCamera {
     const look = (dx: number, dy: number) => {
       if (this.pointerIsConsumed?.()) {
         this.onPointerConsumed?.(dx, dy);
+        // Peeking is deliberate input too. Without this the game kept pulling
+        // your head toward whoever was acting *while you were bent over your
+        // own cards*, and you could not fight it, because the gesture had taken
+        // the pointer you would have fought it with.
+        this.attention.interrupt(Math.hypot(dx, dy), performance.now());
         return;
       }
       const speed = 0.0032;
@@ -153,6 +211,17 @@ export class SeatedCamera {
       if (event.button === 0) this.#dragging = false;
       if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId);
     };
+    // The wheel leans in over the table, and back out again. A posture rather
+    // than a spring: it stays where it is put, because a player who spends the
+    // whole hand hunched over the felt is telling the table something, and one
+    // who has to keep scrolling to stay there is just fighting the controls.
+    //
+    // Deliberately not the same wheel as the action bar's bet sizing: that one
+    // lives on the slider and stops the event before it reaches here.
+    const wheel = (event: WheelEvent) => {
+      event.preventDefault();
+      this.leanTo(this.#lean - event.deltaY / LEAN.travelPixels);
+    };
     const lockChanged = () => {
       const locked = document.pointerLockElement === element;
       if (locked === this.#locked) return;
@@ -165,6 +234,7 @@ export class SeatedCamera {
     element.addEventListener('pointermove', move);
     element.addEventListener('pointerup', up);
     element.addEventListener('pointercancel', up);
+    element.addEventListener('wheel', wheel, { passive: false });
     document.addEventListener('pointerlockchange', lockChanged);
     element.style.touchAction = 'none';
 
@@ -173,6 +243,7 @@ export class SeatedCamera {
       element.removeEventListener('pointermove', move);
       element.removeEventListener('pointerup', up);
       element.removeEventListener('pointercancel', up);
+      element.removeEventListener('wheel', wheel);
       document.removeEventListener('pointerlockchange', lockChanged);
       if (document.pointerLockElement === element) document.exitPointerLock?.();
     };
@@ -186,6 +257,10 @@ export class SeatedCamera {
 
   /** Eases toward where the player is looking, so the head has some weight. */
   update(delta: number, now = performance.now()): void {
+    // Nothing pulls at a player who is busy with their own hands. Holding a
+    // card up is a commitment; the room can wait.
+    if (this.pointerIsConsumed?.()) this.attention.clear();
+
     // Bias moves the *target*, not the camera, so a player who takes over
     // mid-drift continues from where their head already was.
     const drift = this.attention.step(this.#targetYaw, this.#targetPitch, delta, now);
@@ -202,7 +277,8 @@ export class SeatedCamera {
     this.#yaw += (this.#targetYaw - this.#yaw) * ease;
     this.#pitch += (this.#targetPitch - this.#pitch) * ease;
     this.#applyRotation();
-    this.#updateGaze();
+    this.#applyLean();
+    this.#updateGaze(now);
   }
 
   /**
@@ -228,18 +304,81 @@ export class SeatedCamera {
   }
 
   setAspect(aspect: number): void {
+    this.#aspect = aspect;
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
   }
 
-  #updateGaze(): void {
+  /**
+   * Moves the head over the table and narrows the view.
+   *
+   * Both together, because either alone is wrong: narrowing the field of view
+   * on its own is a telescope, and moving without it is a face pressed into the
+   * felt. Together they read as a person craning to see the board — which is
+   * what the animation on everybody else's screen shows them doing.
+   */
+  #applyLean(): void {
+    if (
+      this.#lean === this.#shownLean &&
+      this.#leanYaw === this.#yaw &&
+      this.#leanPitch === this.#pitch
+    ) {
+      return;
+    }
+    this.#shownLean = this.#lean;
+    this.#leanYaw = this.#yaw;
+    this.#leanPitch = this.#pitch;
+
+    // Straight along the line of sight, pitch included.
+    //
+    // Two wrong versions came before this one. Leaning toward the middle of the
+    // table pushed your head over the top of your own hand when you tried to
+    // read it; leaning along the horizontal heading did the same thing more
+    // slowly. Following the whole look means the lean magnifies exactly what
+    // you were already looking at — the board, an opponent's hands, or the two
+    // cards in front of you, which you approach by going *down*.
+    const heading = this.#baseYaw + this.#yaw;
+    const reach = LEAN.reach * this.#lean;
+    const level = Math.cos(this.#pitch);
+
+    this.camera.position.set(
+      this.#seat.x - Math.sin(heading) * level * reach,
+      this.#seat.y + Math.sin(this.#pitch) * reach,
+      this.#seat.z - Math.cos(heading) * level * reach,
+    );
+    this.camera.fov = LEAN.restFov + (LEAN.closeFov - LEAN.restFov) * this.#lean;
+    this.camera.aspect = this.#aspect;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Commits a gaze only once the player has settled on it.
+   *
+   * Gaze is replicated as a subject rather than an angle, so a smooth sweep of
+   * the head across the table arrives at the other clients as a sequence of
+   * snaps — seat 3, away, seat 4, the board, seat 5 — and every one of them
+   * yanks an avatar's head to a new point. Sweeping your eyes across the room
+   * made you look, to everybody else, like you were shaking your head violently.
+   *
+   * The fix is at the source rather than in the animation: passing your eyes
+   * over somebody on the way to somebody else is not looking at them, so it is
+   * not reported. Only a target held for `GAZE_DWELL_MS` is.
+   *
+   * This makes the signal better as well as smoother. A head that snaps to
+   * everything carries no information; a head that settles carries all of it.
+   */
+  #updateGaze(now: number): void {
     this.camera.getWorldDirection(this.#forward);
     const target = resolveGaze(this.eye, this.#forward, this.#seatIndex, this.#seats);
-    const same =
-      target.kind === this.#gaze.kind &&
-      (target.kind !== 'SEAT' ||
-        (this.#gaze.kind === 'SEAT' && target.seatIndex === this.#gaze.seatIndex));
-    if (same) return;
+
+    if (!gazeEquals(target, this.#candidate)) {
+      this.#candidate = target;
+      this.#candidateSince = now;
+      return;
+    }
+    if (gazeEquals(target, this.#gaze)) return;
+    if (now - this.#candidateSince < GAZE_DWELL_MS) return;
+
     this.#gaze = target;
     this.onGazeChanged?.(target);
   }

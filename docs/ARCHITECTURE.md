@@ -831,3 +831,88 @@ screenshots are a poor instrument here.
 seat's body is doing, including how old its last presence frame is. It is the only
 honest way to ask "did the table actually see that?", and `npm run shots` prints
 it alongside the screenshots.
+
+
+---
+
+## 17. What playtesting changed
+
+Four notes came back from the first real session at the table. Two were polish;
+two were things that were simply wrong, and one of those was wrong in a way the
+whole phase depended on.
+
+**Hole cards were face up.** The face was printed on the top surface and legibility
+came from tilt, which meant a player could read their hand without touching it —
+so peeking was an animation with nothing behind it, and the mechanic the phase was
+built around did not exist. Hole cards are now dealt **face down**, with the face
+on the underside and the top always a back. Board cards are the opposite, because
+the Dealer turns those over for everybody.
+
+**The peek is a bend, not a tilt.** The old pose rotated a rigid card up off the
+felt, which is the wrong physical claim: it says the card left the table, and a
+careful player never lets that happen. The card is now subdivided along its length
+and genuinely curls — the far edge stays pinned, the near corner comes up, and one
+corner leads so the fold runs diagonally under a fingertip. `peel.ts` is the maths
+and has its own tests; the properties that matter (the far edge never lifts, the
+near edge passes vertical, the fold is a curve and not a crease) are asserted
+rather than eyeballed.
+
+Two things had to change to make the result *readable*. The underside of a curled
+card faces away from the room's only lamp, so it rendered as a black wedge: the
+card material now carries an emissive map of the atlas itself, so pale card stock
+lifts out of the dark and the near-black back barely moves — which does the board
+a favour too. And the faces are now **four-index**, with a rank in every corner
+rather than the usual two. Four-index decks exist for exactly this situation: with
+two, half the time the index is on the part still lying flat and you have bent your
+card in front of the whole table to learn nothing.
+
+**Heads cranked back and forth.** Gaze is replicated as a subject rather than an
+angle, so sweeping your eyes across the table arrived at everybody else as
+`seat 3 → away → seat 4 → board → seat 5`, and each snap yanked an avatar's head
+somewhere new. Fixed at the source, not in the animation: a target must be held
+for 220ms before it is reported, so passing your eyes over somebody on the way to
+somebody else is not looking at them. `AWAY` now *holds* the head where it is
+instead of swinging it to a canned resting pose, which was most of the movement.
+Necks are also slower and speed-limited. This makes the signal better as well as
+smoother — a head that snaps at everything carries no information.
+
+**Zoom is a lean.** The board was hard to read from a seat. A camera zoom would
+have been simpler and wrong: it would let somebody study an opponent's hands from
+across the room at no cost, in a game whose premise is that looking is something
+others can see you do. So the wheel leans you in — the head moves along the line
+of sight and the field of view narrows — and `lean` is replicated like everything
+else, so craning over the felt is a tell. It follows the *whole* look, pitch
+included, so leaning while looking down at your own hand goes down toward it
+rather than out over the table.
+
+**The log draws cards.** `flop: 9h 6d Kh` is a thing you decode. Three small cards
+is a thing you glance at, and glancing is what a log at the edge of the screen is
+for. `describeEvent` returns pieces rather than a string, and cards among them are
+rendered as chips.
+
+### Three bugs the notes flushed out
+
+None of them were the thing being reported, and all three were invisible in a
+screenshot until something else was fixed first.
+
+**Changing seats stopped moving the camera.** The lean rewrite routed the camera's
+position through `#applyLean`, which skips its work when the posture has not
+changed — correct every frame, catastrophic the one time the *seat* changed
+instead. Players sat in the Dealer's chair looking out along their own seat's
+heading. It is now a test: sitting at a seat puts the camera at that seat.
+
+**The attention bias was a camera lock.** It moved a fraction of the *remaining*
+angle every frame, which converges: over a second the "gentle nudge" arrived fully
+on whoever had acted. `maxClose` capped the per-frame rate and not the total, and
+the test that was supposed to catch this ran for 1.3 seconds and asserted only
+that the head had not passed the target. A pull is now bounded by total
+displacement, measured from where the head actually was, and re-focusing the same
+subject extends the moment rather than re-measuring from the new position. The
+tests run ten seconds, at two frame rates, and would fail loudly.
+
+**Your head wandered while you were peeking.** The gesture takes the pointer, and
+`look()` returned before ever telling the attention system that the player was
+doing something deliberate — so the game pulled your head toward the acting player
+while you were bent over your own cards, and you could not fight it, because the
+gesture had taken the pointer you would have fought it with. Peeking now counts as
+deliberate input, and nothing pulls at a player who is busy with their own hands.

@@ -34,7 +34,7 @@ hands**, through one function.
   do it. Where you look, how far you lifted, and whether your hands are on your
   chips all reach the rest of the table — and going quiet just makes you still.
 
-255 tests, including 140 fuzzed whole matches, a shuffle fairness suite, and a
+280 tests, including 140 fuzzed whole matches, a shuffle fairness suite, and a
 hidden-information suite that audits every player's view at every decision point.
 
 The Dealer, the lighting, stress, tells, perks and sacrifices are still ahead —
@@ -73,12 +73,14 @@ readies up, the host begins.
 |---|---|
 | Look around | drag, or click the table for pointer lock (Escape releases) |
 | **Look at your cards** | hold right-click or `V`, then pull the mouse toward you |
+| Lean in / sit back | mouse wheel over the table |
 | Act | `F` fold · `C` check/call · `R` raise · `A` all in, or click |
 | Size a bet | the slider, or the mouse wheel over it |
 
-You will not see your own cards until you lift them. That is deliberate: the
-look is the game. Everyone at the table can see you take it, and see how long
-you spend, and see you take another one right after the flop.
+Your cards are dealt face down and you will not see them until you curl a corner
+up. That is deliberate: the look is the game. Everyone at the table can see you
+take it, and see how long you spend, and see you take another one right after the
+flop — and leaning in over the felt is just as visible as everything else.
 
 To run them in separate terminals instead:
 

@@ -23,6 +23,7 @@ import { GAZE_AWAY, PRESENCE, gazeEquals, quantisePeek, type GazeTarget } from '
 export interface BodyReport {
   gaze: GazeTarget;
   peek: number;
+  lean: number;
   handlingChips: boolean;
 }
 
@@ -39,7 +40,7 @@ export class PresenceReporter {
   #intervalMs: number;
   #heartbeatMs: number;
 
-  #current: BodyReport = { gaze: GAZE_AWAY, peek: 0, handlingChips: false };
+  #current: BodyReport = { gaze: GAZE_AWAY, peek: 0, lean: 0, handlingChips: false };
   #lastSent: BodyReport | null = null;
   /**
    * Negative infinity means "due now".
@@ -73,6 +74,10 @@ export class PresenceReporter {
     this.#current.peek = exposure;
   }
 
+  setLean(amount: number): void {
+    this.#current.lean = amount;
+  }
+
   setHandlingChips(handling: boolean): void {
     this.#current.handlingChips = handling;
   }
@@ -95,6 +100,7 @@ export class PresenceReporter {
     const report: BodyReport = {
       gaze: this.#current.gaze,
       peek: quantisePeek(this.#current.peek),
+      lean: quantisePeek(this.#current.lean),
       handlingChips: this.#current.handlingChips,
     };
 
@@ -109,6 +115,7 @@ export class PresenceReporter {
     return (
       !gazeEquals(last.gaze, this.#current.gaze) ||
       quantisePeek(last.peek) !== quantisePeek(this.#current.peek) ||
+      quantisePeek(last.lean) !== quantisePeek(this.#current.lean) ||
       last.handlingChips !== this.#current.handlingChips
     );
   }

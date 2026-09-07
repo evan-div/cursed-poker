@@ -34,6 +34,9 @@ import { gazePoint } from './gaze.js';
 
 const CLOTH = [MATERIALS.cloth, MATERIALS.clothAlt, MATERIALS.clothThird];
 
+/** The fastest a neck turns, in radians per second. */
+const MAX_HEAD_TURN_PER_SECOND = 2.6;
+
 export class Avatar {
   readonly group = new Group();
   readonly hands: HandParts[] = [];
@@ -49,6 +52,7 @@ export class Avatar {
   #targetHeadYaw = 0;
   #targetHeadPitch = 0;
   #peek = 0;
+  #leaningIn = 0;
   #lean = 0;
 
   constructor(readonly seatIndex: number) {
@@ -113,9 +117,10 @@ export class Avatar {
     this.#gaze = target;
     const at = gazePoint(target, this.seatIndex);
     if (!at) {
-      // Looking at nothing: eyes down and slightly aside, the way a person waits.
-      this.#targetHeadYaw = 0.22;
-      this.#targetHeadPitch = -0.3;
+      // Looking at nothing in particular. The head *stays where it is* rather
+      // than swinging to some canned resting pose: `AWAY` is most of what a
+      // sweeping look passes through, and snapping to a fixed spot every time
+      // it did was most of why heads used to crank back and forth.
       return;
     }
 
@@ -147,20 +152,32 @@ export class Avatar {
     this.#peek = clamp(exposure, 0, 1);
   }
 
+  /** How far they are craning over the table to see the board, 0..1. */
+  setLean(amount: number): void {
+    this.#leaningIn = clamp(amount, 0, 1);
+  }
+
   /** Eases the body toward where it is trying to be. Call once per frame. */
   update(delta: number): void {
-    const ease = 1 - Math.exp(-9 * delta);
-    this.#headYaw += (this.#targetHeadYaw - this.#headYaw) * ease;
-    this.#headPitch += (this.#targetHeadPitch - this.#headPitch) * ease;
+    // Slower than a camera, and speed-limited on top. A neck has weight, and a
+    // head that can cross the whole table in a frame reads as a glitch however
+    // correct the angle it arrives at is.
+    const ease = 1 - Math.exp(-5.5 * delta);
+    const most = MAX_HEAD_TURN_PER_SECOND * delta;
+    this.#headYaw += limit((this.#targetHeadYaw - this.#headYaw) * ease, most);
+    this.#headPitch += limit((this.#targetHeadPitch - this.#headPitch) * ease, most);
 
     this.#head.rotation.order = 'YXZ';
     this.#head.rotation.y = this.#headYaw;
     this.#head.rotation.x = this.#headPitch;
 
-    // Leaning over your own cards. Small — the tell is that it happens at all,
-    // and when, not how far somebody bent.
-    this.#lean += (this.#peek - this.#lean) * (1 - Math.exp(-7 * delta));
-    this.#torso.rotation.x = this.#torsoRestX - this.#lean * 0.11;
+    // Leaning: over your own cards while peeking, or out over the table to see
+    // the board. Whichever is further — you cannot do both and be sitting up.
+    // Small, because the tell is that it happens at all, and when, not how far
+    // somebody bent.
+    const wanted = Math.max(this.#peek, this.#leaningIn);
+    this.#lean += (wanted - this.#lean) * (1 - Math.exp(-7 * delta));
+    this.#torso.rotation.x = this.#torsoRestX - this.#lean * 0.16;
   }
 
   #headWorldPosition(): { x: number; y: number; z: number } {
@@ -228,4 +245,9 @@ export class Avatar {
 /** Brings an angle back into -PI..PI, so a head turns the short way round. */
 function wrapAngle(angle: number): number {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+/** Clamps a step to a maximum magnitude, keeping its sign. */
+function limit(value: number, most: number): number {
+  return Math.min(Math.max(value, -most), most);
 }

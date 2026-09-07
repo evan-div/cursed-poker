@@ -84,6 +84,7 @@ export const gazeTargetSchema = z.discriminatedUnion('kind', [
 export const presenceUpdateSchema = z.object({
   gaze: gazeTargetSchema,
   peek: z.number().min(0).max(1),
+  lean: z.number().min(0).max(1),
   handlingChips: z.boolean(),
 });
 

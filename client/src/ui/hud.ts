@@ -1,5 +1,7 @@
 import type { ClientView, LegalActions, PlayerAction } from '@cursed/shared';
 import { button, chips, countdown, el } from './dom.js';
+import { cardChip } from './card-chip.js';
+import type { LogLine } from '../narration.js';
 
 /**
  * The overlay sitting on top of the table.
@@ -32,7 +34,7 @@ export interface HudHandlers {
 
 export interface HudState {
   view: ClientView;
-  log: string[];
+  log: LogLine[];
   connected: boolean;
   pendingAction: boolean;
   /** Whether the pointer is captured, so the hint can say the right thing. */
@@ -80,7 +82,13 @@ function topBar(state: HudState): HTMLElement {
 function sideLog(state: HudState): HTMLElement {
   const panel = el('div', 'hud-log');
   const list = el('ol', 'log');
-  for (const line of [...state.log].slice(-14).reverse()) list.append(el('li', '', line));
+  for (const line of [...state.log].slice(-14).reverse()) {
+    const item = el('li');
+    for (const piece of line) {
+      item.append(typeof piece === 'string' ? document.createTextNode(piece) : cardChip(piece.card));
+    }
+    list.append(item);
+  }
   panel.append(list);
   return panel;
 }

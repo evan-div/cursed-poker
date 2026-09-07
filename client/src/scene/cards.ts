@@ -1,8 +1,9 @@
-import { BoxGeometry, Group, Mesh, MeshStandardMaterial, type BufferAttribute } from 'three';
+import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three';
 import type { Card, ClientView, PresenceFrame, SeatView } from '@cursed/shared';
-import { liftAngle } from '../interaction/peek.js';
-import { BACK_CELL, BLANK_CELL, cellUv, faceCell, type AtlasCell } from './card-atlas.js';
+import { BACK_CELL, BLANK_CELL, faceCell } from './card-atlas.js';
+import { TOP_FACE, UNDERSIDE, applyPeel, makeCardGeometry, setFaceCell } from './card-mesh.js';
 import { cardAtlasTexture } from './card-texture.js';
+import { peelAngle } from './peel.js';
 import {
   CARD,
   RADIUS,
@@ -24,23 +25,52 @@ import {
  * face-down card is drawn with the back cell because the client was never told
  * what it is — not because it is told and declines to show it.
  *
- * Peeking works the same way, which is what makes it safe. Every seat's cards
- * lift by that seat's replicated exposure, so the *gesture* is public and
- * everyone can see who is looking at their hand and how hard. What lifts toward
- * an opponent's eyes is a card with no face on it, because their client has no
- * face to put there. There is nothing to hide, so nothing can be uncovered.
+ * **Hole cards are dealt face down.** The top of the card is always its back;
+ * the printed face is on the underside, against the felt, and the only way to
+ * see it is to bend the near corner up until the underside comes round toward
+ * your own eyes. Board cards are the opposite, because the Dealer turns those
+ * over for everybody.
+ *
+ * That arrangement is the mechanic. An earlier version laid hole cards face up
+ * and used tilt for legibility, which meant a player could read their hand
+ * without touching it and peeking was an animation with nothing behind it.
+ *
+ * It is also the safer arrangement: the face is on the side of the card nobody
+ * can see without its owner deliberately curling it toward themselves. Every
+ * seat's cards bend by that seat's replicated exposure, so the *gesture* is
+ * public — everyone sees who is looking at their hand and how hard — while what
+ * curls toward an opponent's eyes is a card with no face on it, because their
+ * client has no face to put there.
  */
-
-const FACE = 4; // +Z, which points up once the card is laid flat
-const BACK = 5; // -Z
 
 let sharedMaterial: MeshStandardMaterial | null = null;
 
 function material(): MeshStandardMaterial {
-  sharedMaterial ??= new MeshStandardMaterial({
-    map: cardAtlasTexture(),
+  if (sharedMaterial) return sharedMaterial;
+
+  const atlas = cardAtlasTexture();
+  sharedMaterial = new MeshStandardMaterial({
+    map: atlas,
     roughness: 0.62,
     metalness: 0,
+    /**
+     * Cards carry a little of their own light.
+     *
+     * There is one lamp in this room and it is above the table, so the
+     * underside of a curled card — which is exactly where a hole card's face is
+     * printed — sits in its own shadow and reads as a black wedge. No amount of
+     * peeling helps, because the surface is turning *away* from the only light
+     * there is.
+     *
+     * The emissive map is the atlas itself, so the glow follows the ink: pale
+     * card stock lifts out of the dark and the near-black back barely moves.
+     * Faint enough to read as paper catching stray light rather than as a
+     * screen, and it does the board a favour too — five cards in the middle of a
+     * dim table were hard to make out from any seat.
+     */
+    emissive: 0xffffff,
+    emissiveMap: atlas,
+    emissiveIntensity: 0.34,
   });
   return sharedMaterial;
 }
@@ -50,33 +80,34 @@ export function readableFromYaw(station: number): number {
   return Math.PI - stationAngle(station);
 }
 
-function setFaceUv(geometry: BoxGeometry, face: number, cell: AtlasCell): void {
-  const uv = geometry.getAttribute('uv') as BufferAttribute;
-  const rect = cellUv(cell);
-  const base = face * 4;
-  // BoxGeometry lays each face out as top-left, top-right, bottom-left, bottom-right.
-  uv.setXY(base + 0, rect.uMin, rect.vMax);
-  uv.setXY(base + 1, rect.uMax, rect.vMax);
-  uv.setXY(base + 2, rect.uMin, rect.vMin);
-  uv.setXY(base + 3, rect.uMax, rect.vMin);
-  uv.needsUpdate = true;
-}
-
 function makeCardMesh(): Mesh {
-  const geometry = new BoxGeometry(CARD.width, CARD.height, CARD.thickness);
+  const geometry = makeCardGeometry();
   // Every edge is plain card stock until told otherwise.
-  for (let face = 0; face < 6; face++) setFaceUv(geometry, face, BLANK_CELL);
-  setFaceUv(geometry, BACK, BACK_CELL);
+  for (let face = 0; face < 6; face++) setFaceCell(geometry, face, BLANK_CELL);
   const mesh = new Mesh(geometry, material());
   mesh.castShadow = true;
   mesh.rotation.order = 'YXZ';
-  mesh.rotation.x = -Math.PI / 2; // lay it flat, face up
+  mesh.rotation.x = -Math.PI / 2; // lay it flat on the felt
   return mesh;
 }
 
-function showCard(mesh: Mesh, card: Card | null): void {
+/** A board card: turned over by the Dealer, so its face is on top. */
+function showFaceUp(mesh: Mesh, card: Card | null): void {
   const geometry = mesh.geometry as BoxGeometry;
-  setFaceUv(geometry, FACE, card === null ? BACK_CELL : faceCell(card));
+  setFaceCell(geometry, TOP_FACE, card === null ? BACK_CELL : faceCell(card));
+  setFaceCell(geometry, UNDERSIDE, BACK_CELL);
+}
+
+/**
+ * A hole card: back up, face underneath.
+ *
+ * `card` is null for every seat but the viewer's own, in which case both sides
+ * are a back — there is no face to hide because there is no face here at all.
+ */
+function showFaceDown(mesh: Mesh, card: Card | null): void {
+  const geometry = mesh.geometry as BoxGeometry;
+  setFaceCell(geometry, TOP_FACE, BACK_CELL);
+  setFaceCell(geometry, UNDERSIDE, card === null ? BACK_CELL : faceCell(card));
 }
 
 /**
@@ -122,41 +153,14 @@ export function holeCardRest(seatIndex: number, cardIndex: number): Vec3 {
 }
 
 /**
- * Where a card is once its owner has started lifting it.
+ * How far a seat's cards are bent, given the exposure reported for that seat.
  *
- * The card pivots on its *near* edge and raises its far edge, which is how
- * somebody props a card against the felt to read it: the printed face turns
- * toward the person holding it and away from everybody else. Not that it would
- * matter if it did not — an opponent's client has no face to turn.
- *
- * Pure geometry, so "which way does a lifted card point?" is a property with a
- * test rather than something that looks about right in a screenshot. The two
- * cards are staggered: the near one leads, so a small lift shows one rank rather
- * than half of each.
+ * The two cards do not come up together. The near one leads, which is how a
+ * person actually does it, and it means a small peek shows one rank rather than
+ * half of each.
  */
-export function holeCardPose(
-  seatIndex: number,
-  cardIndex: number,
-  exposure: number,
-): { position: Vec3; rotationX: number; rotationY: number } {
-  const rest = holeCardRest(seatIndex, cardIndex);
-  const own = clamp01(exposure * (cardIndex === 0 ? 1.12 : 0.88));
-  const lift = liftAngle(own);
-
-  // The direction "away from the middle of the table", for this seat.
-  const angle = stationAngle(seatStation(seatIndex));
-  const half = CARD.height / 2;
-  const slide = half * (1 - Math.cos(lift));
-
-  return {
-    position: {
-      x: rest.x + Math.sin(angle) * slide,
-      y: rest.y + Math.sin(lift) * half,
-      z: rest.z - Math.cos(angle) * slide,
-    },
-    rotationX: -Math.PI / 2 + lift,
-    rotationY: readableFromYaw(seatStation(seatIndex)),
-  };
+export function cardBend(cardIndex: number, exposure: number): number {
+  return peelAngle(clamp01(exposure) * (cardIndex === 0 ? 1.12 : 0.88));
 }
 
 export class CardRenderer {
@@ -165,6 +169,8 @@ export class CardRenderer {
   #board: Mesh[] = [];
   #hole = new Map<number, Mesh[]>();
   #poses = new Map<number, HolePose>();
+  #revealed = new Map<number, boolean>();
+  #bent = new Map<Mesh, number>();
   #localSeat: number | null = null;
   #localPeek = 0;
 
@@ -203,7 +209,7 @@ export class CardRenderer {
     this.#board.forEach((mesh, index) => {
       const card = board[index];
       mesh.visible = card !== undefined;
-      if (card !== undefined) showCard(mesh, card);
+      if (card !== undefined) showFaceUp(mesh, card);
     });
 
     const seats = view.hand?.seats ?? [];
@@ -217,30 +223,42 @@ export class CardRenderer {
     for (const seat of seats) {
       const meshes = this.#holeCardsFor(seat.seatIndex);
       const faces = visibleFaces(seat, view);
+      // A showdown turns cards over for the whole table; until then they lie
+      // face down, and the only way to see one is to bend it.
+      const revealed = seat.revealedCards !== null;
+      this.#revealed.set(seat.seatIndex, revealed);
+
       meshes.forEach((mesh, index) => {
         mesh.visible = seat.inHand && !seat.folded;
-        showCard(mesh, faces[index] ?? null);
+        const card = faces[index] ?? null;
+        if (revealed) showFaceUp(mesh, card);
+        else showFaceDown(mesh, card);
       });
     }
   }
 
   /**
-   * Puts every seat's cards where its hands are putting them.
+   * Bends every seat's cards by however far its owner has curled them.
    *
    * Called every frame rather than on every view, because a peek is a
-   * continuous movement and the view only changes when poker does. All the
-   * geometry lives in `holeCardPose`; this just applies it.
+   * continuous movement and the view only changes when poker does. The vertex
+   * work is skipped whenever a card's bend has not actually changed, so a table
+   * of people sitting still costs nothing at all.
    */
   updatePoses(): void {
     for (const [seatIndex, meshes] of this.#hole) {
-      const exposure =
-        seatIndex === this.#localSeat ? this.#localPeek : (this.#poses.get(seatIndex)?.peek ?? 0);
+      // A revealed hand is lying face up on the table; nobody is holding it.
+      const exposure = this.#revealed.get(seatIndex)
+        ? 0
+        : seatIndex === this.#localSeat
+          ? this.#localPeek
+          : (this.#poses.get(seatIndex)?.peek ?? 0);
 
       meshes.forEach((mesh, index) => {
-        const pose = holeCardPose(seatIndex, index, exposure);
-        mesh.position.set(pose.position.x, pose.position.y, pose.position.z);
-        mesh.rotation.x = pose.rotationX;
-        mesh.rotation.y = pose.rotationY;
+        const bend = cardBend(index, exposure);
+        if (this.#bent.get(mesh) === bend) return;
+        this.#bent.set(mesh, bend);
+        applyPeel(mesh.geometry as BoxGeometry, bend);
       });
     }
   }
@@ -252,10 +270,9 @@ export class CardRenderer {
     const meshes: Mesh[] = [];
     for (let index = 0; index < 2; index++) {
       const mesh = makeCardMesh();
-      const pose = holeCardPose(seatIndex, index, 0);
-      mesh.position.set(pose.position.x, pose.position.y, pose.position.z);
-      mesh.rotation.x = pose.rotationX;
-      mesh.rotation.y = pose.rotationY;
+      const at = holeCardRest(seatIndex, index);
+      mesh.position.set(at.x, at.y, at.z);
+      mesh.rotation.y = readableFromYaw(seatStation(seatIndex));
       mesh.visible = false;
       meshes.push(mesh);
       this.group.add(mesh);

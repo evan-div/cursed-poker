@@ -57,7 +57,7 @@ describe('reporting a body', () => {
     // Nothing changed for two seconds, and the table was told so four times
     // rather than being left to wonder whether we were still connected.
     expect(sent.length).toBeGreaterThanOrEqual(4);
-    expect(sent.every((r) => r.peek === 0 && r.gaze.kind === 'AWAY')).toBe(true);
+    expect(sent.every((r) => r.peek === 0 && r.lean === 0 && r.gaze.kind === 'AWAY')).toBe(true);
   });
 
   it('does not repeat itself between heartbeats', () => {
@@ -76,11 +76,19 @@ describe('reporting a body', () => {
     reporter.update(200);
     reporter.setPeek(0.5);
     reporter.update(300);
+    reporter.setLean(0.75);
+    reporter.update(400);
+    expect(sent.at(-1)!.lean).toBe(0.75);
 
-    expect(sent).toHaveLength(4);
+    // Leaning back out is a movement too.
+    reporter.setLean(0);
+    reporter.update(500);
+    expect(sent).toHaveLength(6);
+    reporter.setLean(0);
     expect(sent.at(-1)).toEqual({
       gaze: { kind: 'SEAT', seatIndex: 3 },
       peek: 0.5,
+      lean: 0,
       handlingChips: true,
     });
   });

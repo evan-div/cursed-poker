@@ -106,6 +106,23 @@ animates yet (Phase 6).
 **70 new tests** (255 total), and a `__bodies()` dev hook, because two of this
 phase's three real bugs were invisible in a screenshot.
 
+### Revised after the first playtest (280 tests)
+
+- [x] Hole cards dealt **face down**, face on the underside — the earlier version
+      laid them face up, so a hand could be read without ever being touched
+- [x] The peek is a real **bend**: the card is subdivided and curls, far edge
+      pinned, one corner leading
+- [x] Cards carry a faint emissive map, so a curled underside is not a black
+      wedge and the board is legible from a seat
+- [x] **Four-index** card faces, so whichever corner you lift has something on it
+- [x] Gaze dwell (220ms) and a slower, speed-limited neck — sweeping your eyes
+      across the table no longer looks like head-shaking to everyone else
+- [x] Leaning in on the wheel, replicated as a tell, following the whole line of
+      sight rather than pointing at the table centre
+- [x] Log lines draw cards instead of spelling them
+- [x] Fixed: changing seats left the camera behind; the attention bias converged
+      instead of nudging; your head wandered while you were peeking
+
 ---
 
 ## Phase 5 — The Dealer and atmosphere
@@ -213,6 +230,7 @@ At the table:
 |---|---|
 | Look around | drag, or click the table for pointer lock (Escape releases) |
 | **Look at your cards** | hold right-click or `V`, then pull the mouse toward you |
+| Lean in / sit back | mouse wheel over the table — everyone can see you do it |
 | Act | `F` fold · `C` check/call · `R` raise · `A` all in, or click |
 | Size a bet | the slider, or the mouse wheel over it |
 
