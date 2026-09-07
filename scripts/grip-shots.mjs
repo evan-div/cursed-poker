@@ -77,7 +77,13 @@ async function pull(pixels, steps) {
   at += pixels;
 }
 
-await look(0, 130);
+// A nudge, not a stare. A seated player's resting pitch already aims most of
+// the way at their own cards (see `REST_AIM_TOWARD_OWN_CARDS`), so the hundred
+// and thirty pixels this used to drag — twenty-four degrees — buried the shot
+// in the player's own lap. It went unnoticed for as long as it did because the
+// old code then jumped the cursor back up before the peek, which under the
+// pointer lock is itself a look, and cancelled most of it by accident.
+await look(0, 35);
 await me.waitForSelector('.hud-hint .hint-strong', { timeout: 90_000 });
 
 // Peel, then keep pulling past the break so the pair leaves the felt. Four
