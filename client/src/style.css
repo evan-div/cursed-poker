@@ -136,13 +136,15 @@ input[type="range"] { padding: 0; accent-color: var(--brass); }
  */
 .chip-card {
   display: inline-flex; align-items: center; gap: 1px;
-  padding: 1px 3px; margin: 0 1px; vertical-align: -1px;
+  padding: 2px 4px; margin: 0 2px; vertical-align: -3px;
   background: #ddd6c9; color: #14100e;
   border: 1px solid #a89f91; border-radius: 2px;
   font-family: Georgia, serif; line-height: 1;
 }
-.chip-card b { font-size: 11px; font-weight: 700; }
-.chip-card i { font-size: 10px; font-style: normal; }
+/* Bigger than the words around them: a log line is read by glancing at the
+   cards in it, so they are the part that has to survive being glanced at. */
+.chip-card b { font-size: 15px; font-weight: 700; }
+.chip-card i { font-size: 14px; font-style: normal; }
 .chip-card.hearts, .chip-card.diamonds { color: #9c2018; }
 /* The most recent line is the bright one; older cards recede with it. */
 .hud-log .log li:not(:first-child) .chip-card { opacity: 0.72; }

@@ -120,7 +120,8 @@ describe('leaning in', () => {
 
     camera.setPeekLean(1);
     const moved = camera.camera.position.distanceTo(new Vector3(seat.x, seat.y, seat.z));
-    expect(moved).toBeGreaterThan(LEAN.reach * 0.5);
+    expect(moved).toBeCloseTo(LEAN.peekReach, 6);
+    expect(LEAN.peekReach).toBeGreaterThan(LEAN.reach);
     // The head moves; the view does not narrow. Cropping the frustum while
     // somebody bends over their own cards pushes those cards off the bottom of
     // the screen, which is exactly backwards.
@@ -143,10 +144,21 @@ describe('leaning in', () => {
   it('takes whichever is further, rather than stacking them', () => {
     const camera = new SeatedCamera(16 / 9);
     camera.sitAt(0);
+    const seat = new Vector3(
+      seatedView(0).position.x,
+      seatedView(0).position.y,
+      seatedView(0).position.z,
+    );
+
+    // Bending over a card reaches further than leaning at the board, so doing
+    // both is the further of the two and not the sum: you have one head.
     camera.leanTo(1);
-    const forward = camera.camera.position.clone();
     camera.setPeekLean(1);
-    expect(camera.camera.position.distanceTo(forward)).toBeCloseTo(0, 6);
+    expect(camera.camera.position.distanceTo(seat)).toBeCloseTo(LEAN.peekReach, 6);
+
+    // And the shorter one does not shorten the longer.
+    camera.leanTo(0);
+    expect(camera.camera.position.distanceTo(seat)).toBeCloseTo(LEAN.peekReach, 6);
   });
 
   it('clamps to what a person could do without standing up', () => {

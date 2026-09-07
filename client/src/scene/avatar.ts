@@ -2,7 +2,6 @@ import { BoxGeometry, CylinderGeometry, Group, Mesh, Vector3 } from 'three';
 import { GAZE_AWAY, type GazeTarget } from '@cursed/shared';
 import { MATERIALS } from './materials.js';
 import {
-  LOOK_LIMITS,
   RADIUS,
   TABLE,
   clamp,
@@ -37,11 +36,29 @@ const CLOTH = [MATERIALS.cloth, MATERIALS.clothAlt, MATERIALS.clothThird];
 /** The fastest a neck turns, in radians per second. */
 const MAX_HEAD_TURN_PER_SECOND = 2.6;
 
+/** Where a head is joined to its body, in the avatar's own space. */
+const NECK_PIVOT = { y: 1.1, z: 0.02 } as const;
+
+/**
+ * How far a head turns before the shoulders would have to.
+ *
+ * Tighter than the camera's own limits. A player may swivel their view most of
+ * the way behind them, because a real person turns their whole upper body to do
+ * it; a rigid blocky avatar that does the same with its neck alone looks like a
+ * broken toy.
+ */
+const HEAD_LIMITS = {
+  yaw: (72 * Math.PI) / 180,
+  pitchDown: (-52 * Math.PI) / 180,
+  pitchUp: (28 * Math.PI) / 180,
+} as const;
+
 export class Avatar {
   readonly group = new Group();
   readonly hands: HandParts[] = [];
 
   #head: Group;
+  #skull!: Mesh;
   #body: Group;
   #torso: Mesh;
   #torsoRestX: number;
@@ -88,11 +105,21 @@ export class Avatar {
     this.#torsoRestX = torso.rotation.x;
     this.#body.add(hips, torso, shoulders, this.#buildArm(-1, cloth), this.#buildArm(1, cloth));
 
+    // The head group's origin IS the pivot, which has to be at the neck.
+    //
+    // It used to sit at the avatar's feet with the skull positioned a metre and
+    // a fifth up inside it, so turning the head swung it through a metre-wide
+    // arc around the floor: heads left their bodies entirely and sailed off
+    // across the room. Rotating a limb about a joint means putting the joint at
+    // the origin, every time.
+    this.#head.position.set(0, NECK_PIVOT.y, NECK_PIVOT.z);
+
     const neck = new Mesh(new CylinderGeometry(0.048, 0.055, 0.09, 8), MATERIALS.skin);
-    neck.position.set(0, 1.08, 0.02);
+    neck.position.set(0, 1.08 - NECK_PIVOT.y, 0.02 - NECK_PIVOT.z);
     const skull = new Mesh(new BoxGeometry(0.165, 0.2, 0.185), MATERIALS.skin);
-    skull.position.set(0, 1.21, 0.02);
+    skull.position.set(0, 1.21 - NECK_PIVOT.y, 0.02 - NECK_PIVOT.z);
     skull.castShadow = true;
+    this.#skull = skull;
     this.#head.add(neck, skull);
   }
 
@@ -133,14 +160,24 @@ export class Avatar {
     const worldYaw = Math.atan2(dx, dz);
     this.#targetHeadYaw = clamp(
       wrapAngle(worldYaw - this.group.rotation.y),
-      -LOOK_LIMITS.yaw,
-      LOOK_LIMITS.yaw,
+      -HEAD_LIMITS.yaw,
+      HEAD_LIMITS.yaw,
     );
     this.#targetHeadPitch = clamp(
       Math.atan2(dy, Math.hypot(dx, dz)),
-      LOOK_LIMITS.pitchDown,
-      LOOK_LIMITS.pitchUp,
+      HEAD_LIMITS.pitchDown,
+      HEAD_LIMITS.pitchUp,
     );
+  }
+
+  /** Where this avatar's head actually is, for tests and for aiming at it. */
+  get skull(): Mesh {
+    return this.#skull;
+  }
+
+  /** How far the head has turned from straight ahead, in radians. */
+  get headYaw(): number {
+    return this.#headYaw;
   }
 
   get gaze(): GazeTarget {
@@ -183,7 +220,7 @@ export class Avatar {
   #headWorldPosition(): { x: number; y: number; z: number } {
     const station = seatStation(this.seatIndex);
     const at = stationPoint(station, RADIUS.body, 0);
-    return { x: at.x, y: 1.21, z: at.z };
+    return { x: at.x, y: NECK_PIVOT.y, z: at.z };
   }
 
   /**

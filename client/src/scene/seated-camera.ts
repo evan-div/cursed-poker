@@ -145,7 +145,7 @@ export class SeatedCamera {
    * the opposite of the point.
    */
   setPeekLean(exposure: number): void {
-    this.#peekLean = clamp(exposure, 0, 1) * 0.8;
+    this.#peekLean = clamp(exposure, 0, 1);
     this.#applyLean();
   }
 
@@ -339,7 +339,11 @@ export class SeatedCamera {
    */
   #applyLean(): void {
     // Whichever is further: you cannot be sitting back and bent over a card.
-    const lean = Math.max(this.#lean, this.#peekLean);
+    // Bending over a card reaches further than leaning at the board, so the two
+    // are measured in metres rather than compared as fractions.
+    const chosen = LEAN.reach * this.#lean;
+    const overCards = LEAN.peekReach * this.#peekLean;
+    const lean = Math.max(chosen, overCards) / LEAN.reach;
     if (
       lean === this.#shownLean &&
       this.#leanFov === this.#lean &&
@@ -362,7 +366,7 @@ export class SeatedCamera {
     // you were already looking at — the board, an opponent's hands, or the two
     // cards in front of you, which you approach by going *down*.
     const heading = this.#baseYaw + this.#yaw;
-    const reach = LEAN.reach * lean;
+    const reach = Math.max(chosen, overCards);
     const level = Math.cos(this.#pitch);
 
     this.camera.position.set(

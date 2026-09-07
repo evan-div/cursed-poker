@@ -960,3 +960,34 @@ exactly that. Zoom stays for the thing you deliberately chose to squint at.
 The peek-lean is also not reported as a lean. The table already learns about the
 peek; replicating the head movement it causes would show everybody somebody
 hunching over nothing.
+
+
+### The third round: heads leaving bodies
+
+"The heads are still broken" was not the gaze system at all. It was a transform
+mistake in the avatar, and it had been there since Phase 4 added head tracking.
+
+A head group's origin *is* its pivot. This one sat at the avatar's feet, with the
+neck and skull positioned a metre and a fifth up inside it — so rotating it swung
+the head through a metre-wide arc around the floor rather than turning it on its
+neck. At a full turn the head left the body entirely and sailed off across the
+room, which is what those brown slabs floating beside the players were.
+
+The pivot is at the neck now and the children are placed relative to it. There is
+a test that turns every avatar toward every subject at the table and asserts the
+skull never travels more than a few centimetres: a head swivels, it does not
+move. Reverting the fix makes it fail at 0.60m, so it would have caught this.
+
+Head yaw is also clamped tighter than the camera's — 72° against the camera's
+100°. A player may swivel their view most of the way behind them because a real
+person turns their whole upper body to do it; a rigid avatar that does the same
+with its neck alone looks like a broken toy.
+
+Alongside it, the peel went further again: `maxLift` 2.5 → 2.9 radians, which
+folds the corner right back over itself rather than merely standing it up, and
+bending over a card now reaches nearly twice as far as leaning at the board
+(`LEAN.peekReach`), because half of making a corner index legible across a dark
+table is simply being nearer to it. Two tests had to change rather than be made
+to pass: past about 2.3 radians a curling tip starts coming *down* as it rolls
+over, so height is monotonic only up to there, and the peek and the lean are now
+measured in metres rather than compared as fractions.

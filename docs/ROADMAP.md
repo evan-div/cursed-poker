@@ -136,6 +136,17 @@ phase's three real bugs were invisible in a screenshot.
 - [x] Lifting a card brings your head down to it — without narrowing the view,
       which would crop the cards it was trying to show you
 
+### Third round (291 tests)
+
+- [x] **Heads pivot at the neck.** The head group's origin was at the avatar's
+      *feet*, so turning to look at somebody swung the head through a metre-wide
+      arc around the floor and off the body entirely
+- [x] Head yaw clamped to 72°, tighter than the camera's own limits — a rigid
+      avatar craning like a person turning their whole torso looks broken
+- [x] Peel folds the corner right back over (2.9 rad), and bending over a card
+      reaches nearly twice as far as leaning at the board
+- [x] Bigger cards in the activity log
+
 ---
 
 ## Phase 5 — The Dealer and atmosphere

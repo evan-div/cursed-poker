@@ -72,14 +72,16 @@ export const PEEK = {
   /**
    * How far the near edge of a card has bent at full exposure, in radians.
    *
-   * Well past a right angle. Hole cards lie face down, so the underside has to
-   * come round past vertical before its owner can read anything off it — and
-   * *just* past is not enough. At two radians the face was technically pointing
-   * at the player and still nearly edge-on to them, which reads as a card you
-   * cannot quite see. At two and a half it is turned properly up into the
-   * light, which is what somebody bending a card in their hand actually does.
+   * Well past a right angle, and then some. Hole cards lie face down, so the
+   * underside has to come round past vertical before its owner can read
+   * anything off it — and *just* past is nowhere near enough. Two radians left
+   * the face pointing at the player but nearly edge-on to them; two and a half
+   * was legible and still felt like a card you were peering at rather than
+   * reading. At two and nine tenths the corner is folded right back over on
+   * itself and the face is squarely up, which is what somebody who actually
+   * wants to know their hand does with it.
    */
-  maxLift: 2.5,
+  maxLift: 2.9,
   /** Exposure at which a rank becomes readable; below this it is a corner. */
   rankVisibleAt: 0.34,
   /** How quickly a released card falls back to the felt, in exposure per second. */
@@ -121,6 +123,14 @@ export const LEAN = {
   closeFov: 30,
   /** How far the head travels over the table, in metres. */
   reach: 0.13,
+  /**
+   * How far it travels when bending over a card instead.
+   *
+   * Further than a lean at the board, because it is a different movement: you
+   * come down over your own hand and put your face close to it, and half of
+   * making a corner index legible across a dark table is simply being nearer.
+   */
+  peekReach: 0.24,
   /** Wheel travel, in pixels, from sitting back to fully leaned in. */
   travelPixels: 320,
 } as const;

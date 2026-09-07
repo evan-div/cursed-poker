@@ -61,14 +61,21 @@ describe('the far edge stays on the table', () => {
 });
 
 describe('the near edge comes up', () => {
-  it('rises further the harder the card is bent', () => {
+  it('rises further the harder it is bent, until it starts rolling over', () => {
+    // Height is monotonic only up to about 2.3 radians. Past that the tip is
+    // curling back on itself and comes *down* while continuing to turn — which
+    // is what a folded card does, and is why the bend angle rather than the
+    // height is the thing that always increases.
     let previous = -1;
-    for (const bend of [0, 0.3, 0.6, 1.0, 1.4, 1.8, PEEK.maxLift]) {
+    for (const bend of [0, 0.3, 0.6, 1.0, 1.4, 1.8, 2.2]) {
       const height = peelPoint(LEAD_X, NEAR, 0, bend).z;
       expect(height).toBeGreaterThanOrEqual(previous);
       previous = height;
     }
-    expect(previous).toBeGreaterThan(0.02); // a couple of centimetres of card
+
+    // And a fully folded corner is still well clear of the felt — it has rolled
+    // over, not flopped back down onto the table.
+    expect(peelPoint(LEAD_X, NEAR, 0, PEEK.maxLift).z).toBeGreaterThan(0.03);
   });
 
   it('turns the underside past vertical, so its owner can read it', () => {
