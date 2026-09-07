@@ -62,7 +62,9 @@ export class SeatedCamera {
 
   #seat = { x: 0, y: 0, z: 0 };
   #lean = 0;
+  #peekLean = 0;
   #shownLean = -1;
+  #leanFov = -1;
   #leanYaw = 0;
   #leanPitch = 0;
   #aspect: number;
@@ -92,6 +94,7 @@ export class SeatedCamera {
     this.#baseYaw = seat.yaw;
     this.#seatIndex = seatIndex;
     this.#lean = 0;
+    this.#peekLean = 0;
     // Forces the move to actually happen. `#applyLean` skips its work when the
     // lean has not changed, which is right every frame and catastrophic here:
     // sitting down at a new seat with the same posture left the camera at the
@@ -110,6 +113,14 @@ export class SeatedCamera {
    * the rest of the room can see you do, which is the whole reason this is a
    * lean rather than a camera zoom.
    */
+  /**
+   * The posture the *player* chose, which is what the table is told about.
+   *
+   * Not the same as how far the camera has actually come forward: lifting a
+   * card brings your head down to it as well, and that movement is already
+   * reported as a peek. Replicating it twice would show the table somebody
+   * hunching over nothing.
+   */
   get lean(): number {
     return this.#lean;
   }
@@ -117,6 +128,24 @@ export class SeatedCamera {
   /** Sets the posture directly. The wheel is the player-facing way in. */
   leanTo(amount: number): void {
     this.#lean = clamp(amount, 0, 1);
+    this.#applyLean();
+  }
+
+  /**
+   * Brings the head down to a card as it is lifted.
+   *
+   * Nobody peels a card and then reads it from where they were sitting; they
+   * bend toward it, which is most of how a corner index becomes legible across
+   * half a metre of dark table. Not quite the full lean — you are looking at
+   * your own hand, not trying to climb onto the felt.
+   *
+   * It moves the head and deliberately does *not* narrow the view. Zoom is for
+   * the thing you chose to squint at; a narrower frustum while bending over
+   * your own cards just crops them out of the bottom of the screen, which is
+   * the opposite of the point.
+   */
+  setPeekLean(exposure: number): void {
+    this.#peekLean = clamp(exposure, 0, 1) * 0.8;
     this.#applyLean();
   }
 
@@ -262,15 +291,11 @@ export class SeatedCamera {
     if (this.pointerIsConsumed?.()) this.attention.clear();
 
     // Bias moves the *target*, not the camera, so a player who takes over
-    // mid-drift continues from where their head already was.
-    const drift = this.attention.step(this.#targetYaw, this.#targetPitch, delta, now);
-    if (drift.yaw !== 0 || drift.pitch !== 0) {
-      this.#targetYaw = clamp(this.#targetYaw + drift.yaw, -LOOK_LIMITS.yaw, LOOK_LIMITS.yaw);
-      this.#targetPitch = clamp(
-        this.#targetPitch + drift.pitch,
-        LOOK_LIMITS.pitchDown,
-        LOOK_LIMITS.pitchUp,
-      );
+    // mid-drift continues from where their head already was. Yaw only: see
+    // `attention.ts` for why a pitch component walks the view off the table.
+    const drift = this.attention.step(this.#targetYaw, delta, now);
+    if (drift !== 0) {
+      this.#targetYaw = clamp(this.#targetYaw + drift, -LOOK_LIMITS.yaw, LOOK_LIMITS.yaw);
     }
 
     const ease = 1 - Math.exp(-14 * delta);
@@ -282,25 +307,20 @@ export class SeatedCamera {
   }
 
   /**
-   * Points the head at a world position, softly.
+   * Turns the head toward a world position, softly.
    *
-   * The camera's yaw convention is the opposite sign to a body's, so this is the
-   * one place that conversion is done — see `layout.ts`.
+   * Only the direction is used, not the height — the bias turns a head, it does
+   * not lift a chin. The camera's yaw convention is the opposite sign to a
+   * body's, so this is the one place that conversion is done; see `layout.ts`.
    */
   focusOn(at: Vec3, weight: number, now = performance.now(), durationMs?: number): void {
     const dx = at.x - this.camera.position.x;
     const dz = at.z - this.camera.position.z;
-    const dy = at.y - this.camera.position.y;
 
     const worldYaw = Math.atan2(-dx, -dz);
     const yaw = clamp(worldYaw - this.#baseYaw, -LOOK_LIMITS.yaw, LOOK_LIMITS.yaw);
-    const pitch = clamp(
-      Math.atan2(dy, Math.hypot(dx, dz)),
-      LOOK_LIMITS.pitchDown,
-      LOOK_LIMITS.pitchUp,
-    );
 
-    this.attention.focus(yaw, pitch, weight, now, durationMs);
+    this.attention.focus(yaw, weight, now, durationMs);
   }
 
   setAspect(aspect: number): void {
@@ -318,14 +338,18 @@ export class SeatedCamera {
    * what the animation on everybody else's screen shows them doing.
    */
   #applyLean(): void {
+    // Whichever is further: you cannot be sitting back and bent over a card.
+    const lean = Math.max(this.#lean, this.#peekLean);
     if (
-      this.#lean === this.#shownLean &&
+      lean === this.#shownLean &&
+      this.#leanFov === this.#lean &&
       this.#leanYaw === this.#yaw &&
       this.#leanPitch === this.#pitch
     ) {
       return;
     }
-    this.#shownLean = this.#lean;
+    this.#shownLean = lean;
+    this.#leanFov = this.#lean;
     this.#leanYaw = this.#yaw;
     this.#leanPitch = this.#pitch;
 
@@ -338,7 +362,7 @@ export class SeatedCamera {
     // you were already looking at — the board, an opponent's hands, or the two
     // cards in front of you, which you approach by going *down*.
     const heading = this.#baseYaw + this.#yaw;
-    const reach = LEAN.reach * this.#lean;
+    const reach = LEAN.reach * lean;
     const level = Math.cos(this.#pitch);
 
     this.camera.position.set(
@@ -346,6 +370,7 @@ export class SeatedCamera {
       this.#seat.y + Math.sin(this.#pitch) * reach,
       this.#seat.z - Math.cos(heading) * level * reach,
     );
+    // Only a *chosen* lean zooms. See `setPeekLean`.
     this.camera.fov = LEAN.restFov + (LEAN.closeFov - LEAN.restFov) * this.#lean;
     this.camera.aspect = this.#aspect;
     this.camera.updateProjectionMatrix();

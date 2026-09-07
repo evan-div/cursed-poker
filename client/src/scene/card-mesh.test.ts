@@ -10,7 +10,7 @@ import {
   makeCardGeometry,
 } from './card-mesh.js';
 import { CARD } from './layout.js';
-import { peelAngle } from './peel.js';
+import { PEEL_SPAN, peelAngle } from './peel.js';
 
 /**
  * The card as geometry.
@@ -110,11 +110,15 @@ describe('bending the mesh', () => {
     applyPeel(geometry, peelAngle(1));
     const p = positions(geometry);
 
+    // Derived from PEEL_SPAN rather than guessed at: widening the curl is a
+    // tuning change and should not need this test edited to keep passing.
+    const hinge = -CARD.height / 2 + PEEL_SPAN * CARD.height;
+
     let lifted = 0;
     for (let i = 0; i < p.count; i++) {
       if (p.getZ(i) > CARD.thickness) lifted++;
-      // The far edge of the card is pinned to the table, whatever happens.
-      if (p.getY(i) > CARD.height * 0.2) expect(Math.abs(p.getZ(i))).toBeLessThanOrEqual(CARD.thickness);
+      // The far part of the card is pinned to the table, whatever happens.
+      if (p.getY(i) > hinge) expect(Math.abs(p.getZ(i))).toBeLessThanOrEqual(CARD.thickness);
     }
     expect(lifted).toBeGreaterThan(10);
   });

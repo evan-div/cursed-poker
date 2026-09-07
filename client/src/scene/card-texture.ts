@@ -101,16 +101,16 @@ function drawFace(
     ctx.save();
     ctx.translate(x + cx, y + cy);
     if (flip) ctx.rotate(Math.PI);
-    ctx.font = `bold ${Math.round(CELL.height * 0.23)}px Georgia, serif`;
+    ctx.font = `bold ${Math.round(CELL.height * 0.3)}px Georgia, serif`;
     ctx.fillText(rankChar, 0, 0);
-    ctx.font = `${Math.round(CELL.height * 0.17)}px Georgia, serif`;
-    ctx.fillText(glyph, 0, Math.round(CELL.height * 0.18));
+    ctx.font = `${Math.round(CELL.height * 0.22)}px Georgia, serif`;
+    ctx.fillText(glyph, 0, Math.round(CELL.height * 0.23));
     ctx.restore();
   };
-  corner(CELL.width * 0.18, CELL.height * 0.15, false);
-  corner(CELL.width * 0.82, CELL.height * 0.15, false);
-  corner(CELL.width * 0.18, CELL.height * 0.85, true);
-  corner(CELL.width * 0.82, CELL.height * 0.85, true);
+  corner(CELL.width * 0.21, CELL.height * 0.17, false);
+  corner(CELL.width * 0.79, CELL.height * 0.17, false);
+  corner(CELL.width * 0.21, CELL.height * 0.83, true);
+  corner(CELL.width * 0.79, CELL.height * 0.83, true);
 }
 
 function drawBack(ctx: CanvasRenderingContext2D, x: number, y: number): void {

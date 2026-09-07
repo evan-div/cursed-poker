@@ -916,3 +916,47 @@ doing something deliberate — so the game pulled your head toward the acting pl
 while you were bent over your own cards, and you could not fight it, because the
 gesture had taken the pointer you would have fought it with. Peeking now counts as
 deliberate input, and nothing pulls at a player who is busy with their own hands.
+
+
+### The second round of notes
+
+Two of the first round's fixes were not enough, and the screenshots said why.
+
+**The bias was still walking the view off the table, in pitch.** Bounding each
+pull by total displacement fixed one pull; it did nothing about four. Every
+subject worth looking at — a face, the Dealer's hood — sits at roughly the same
+height, so every pull pushed pitch the *same way*, and four players acting in
+turn is four pushes: -0.42 rad, then -0.16, then -0.06, then level. The player
+ends up sitting at a poker table staring at everybody's chest, which is what
+"the head cranked back" looked like from the inside.
+
+Yaw never had this problem, because the seats are in different directions and
+the pulls cancel. So the bias is **yaw only** now. Turning to look at somebody is
+a yaw movement anyway — you do not raise your chin to see across a table you are
+already looking down at.
+
+**The resting camera aimed at the middle of the table**, which put a player's own
+two cards at the very bottom edge of the frame. Every hand began by dragging the
+view down a hundred pixels to find your own hand, and a player who did not know
+to do that experienced the peel as "I curled it as far as it goes and still could
+not see anything" — which is exactly the report. The rest now aims most of the
+way toward your own cards. The board stays comfortably in view; opponents' faces
+become a deliberate look up, which is the right way round, because raising your
+eyes to somebody is the thing worth noticing.
+
+With that fixed the peel needed to work harder rather than differently:
+`PEEL_SPAN` 0.62 → 0.78 so most of the card curls rather than a triangle of it,
+`maxLift` 2.0 → 2.5 rad so the underside turns properly up into the light instead
+of arriving nearly edge-on, `travelPixels` 190 → 150 because the old pull asked
+for most of a mouse mat, and a corner index half again as large.
+
+**Lifting a card now brings your head down to it.** Nobody peels a card and then
+reads it from where they were sitting. It reuses the lean, with one difference
+that matters: it moves the head without narrowing the field of view. A tighter
+frustum while somebody bends over their own cards crops those cards off the
+bottom of the screen, which is the opposite of the point — the first attempt did
+exactly that. Zoom stays for the thing you deliberately chose to squint at.
+
+The peek-lean is also not reported as a lean. The table already learns about the
+peek; replicating the head movement it causes would show everybody somebody
+hunching over nothing.

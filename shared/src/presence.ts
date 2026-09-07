@@ -61,18 +61,25 @@ export function gazeEquals(a: GazeTarget, b: GazeTarget): boolean {
 /** Tuning for the peek gesture. Feel, not rules — nothing here reaches poker. */
 export const PEEK = {
   /**
-   * Pointer travel, in pixels, from flat on the felt to fully lifted. Tuned so
-   * that reading a rank takes a deliberate movement rather than a twitch.
+   * Pointer travel, in pixels, from flat on the felt to fully lifted.
+   *
+   * A deliberate movement, not a twitch — but shorter than it was. The first
+   * value asked for most of a mouse mat, and a player who ran out of desk
+   * before they ran out of card assumed the peel had a smaller limit than it
+   * does.
    */
-  travelPixels: 190,
+  travelPixels: 150,
   /**
    * How far the near edge of a card has bent at full exposure, in radians.
    *
-   * Past a right angle on purpose. Hole cards lie face down, so the underside
-   * has to come round past vertical before its owner can read anything off it;
-   * anything less and a full peek shows you the edge of your own card.
+   * Well past a right angle. Hole cards lie face down, so the underside has to
+   * come round past vertical before its owner can read anything off it — and
+   * *just* past is not enough. At two radians the face was technically pointing
+   * at the player and still nearly edge-on to them, which reads as a card you
+   * cannot quite see. At two and a half it is turned properly up into the
+   * light, which is what somebody bending a card in their hand actually does.
    */
-  maxLift: 2.0,
+  maxLift: 2.5,
   /** Exposure at which a rank becomes readable; below this it is a corner. */
   rankVisibleAt: 0.34,
   /** How quickly a released card falls back to the felt, in exposure per second. */

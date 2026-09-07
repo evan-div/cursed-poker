@@ -123,6 +123,19 @@ phase's three real bugs were invisible in a screenshot.
 - [x] Fixed: changing seats left the camera behind; the attention bias converged
       instead of nudging; your head wandered while you were peeking
 
+### Second round of notes (285 tests)
+
+- [x] **Attention is yaw-only.** Every face is at the same height, so a pitch
+      component pushed the same way on every pull and four players acting in
+      turn walked the view up off the felt entirely
+- [x] **The resting gaze aims at your own cards**, not the middle of the table.
+      It used to put your hand at the very bottom edge, so the peel read as
+      "curled as far as it goes and I still cannot see anything"
+- [x] A much stronger peel: most of the card curls, it turns well past vertical,
+      the pull is shorter, and the corner index is half again as large
+- [x] Lifting a card brings your head down to it — without narrowing the view,
+      which would crop the cards it was trying to show you
+
 ---
 
 ## Phase 5 — The Dealer and atmosphere

@@ -88,9 +88,23 @@ export const EYE_HEIGHT = 1.22;
  *
  * Looking dead level from a chair points you across the table into the dark,
  * which is atmospheric and useless. A real player's resting gaze is down on the
- * felt, and this is the angle from the eye to the middle of the table.
+ * felt — but *how far* down matters more than it looks.
+ *
+ * The first version aimed at the middle of the table, which put a player's own
+ * two cards at the very bottom edge of the screen: every hand began by dragging
+ * the view down a hundred pixels to find your own hand, and if you did not know
+ * to do that, the answer to "what have I got?" was a sliver of card at the
+ * bottom of the frame. So the rest aims most of the way toward your own cards
+ * instead. The board is still comfortably in view; opponents' faces are a
+ * deliberate look up, which is the right way round — raising your eyes to
+ * somebody is the thing worth noticing.
  */
-export const REST_PITCH = -Math.atan2(EYE_HEIGHT - TABLE.surfaceHeight, RADIUS.eye);
+const REST_AIM_TOWARD_OWN_CARDS = 0.68;
+
+const REST_AIM_DISTANCE =
+  RADIUS.eye - REST_AIM_TOWARD_OWN_CARDS * (RADIUS.eye - RADIUS.holeCards);
+
+export const REST_PITCH = -Math.atan2(EYE_HEIGHT - TABLE.surfaceHeight, REST_AIM_DISTANCE);
 
 /** The five community cards, laid left to right across the middle. */
 export const BOARD = {

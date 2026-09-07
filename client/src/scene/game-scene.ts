@@ -88,6 +88,9 @@ export class GameScene {
       onExposure: (exposure) => {
         hooks.onExposure(exposure);
         this.#cards.setLocalPeek(this.#seatIndex ?? null, exposure);
+        // Lifting a card brings your head down to it, which is most of how a
+        // corner index becomes readable across half a metre of dark table.
+        this.seated.setPeekLean(exposure);
       },
     });
 

@@ -113,6 +113,42 @@ describe('leaning in', () => {
     expect(camera.lean).toBe(0.5);
   });
 
+  it('brings the head down to a card as it is lifted', () => {
+    const camera = new SeatedCamera(16 / 9);
+    camera.sitAt(0);
+    const seat = seatedView(0).position;
+
+    camera.setPeekLean(1);
+    const moved = camera.camera.position.distanceTo(new Vector3(seat.x, seat.y, seat.z));
+    expect(moved).toBeGreaterThan(LEAN.reach * 0.5);
+    // The head moves; the view does not narrow. Cropping the frustum while
+    // somebody bends over their own cards pushes those cards off the bottom of
+    // the screen, which is exactly backwards.
+    expect(camera.camera.fov).toBe(LEAN.restFov);
+
+    // Letting go sits back up.
+    camera.setPeekLean(0);
+    expect(camera.camera.position.distanceTo(new Vector3(seat.x, seat.y, seat.z))).toBeCloseTo(0, 6);
+  });
+
+  it('does not report bending over a card as a chosen posture', () => {
+    // The table already learns about the peek. Reporting the head movement it
+    // causes as a lean too would show everybody somebody hunching over nothing.
+    const camera = new SeatedCamera(16 / 9);
+    camera.sitAt(0);
+    camera.setPeekLean(1);
+    expect(camera.lean).toBe(0);
+  });
+
+  it('takes whichever is further, rather than stacking them', () => {
+    const camera = new SeatedCamera(16 / 9);
+    camera.sitAt(0);
+    camera.leanTo(1);
+    const forward = camera.camera.position.clone();
+    camera.setPeekLean(1);
+    expect(camera.camera.position.distanceTo(forward)).toBeCloseTo(0, 6);
+  });
+
   it('clamps to what a person could do without standing up', () => {
     const camera = new SeatedCamera(16 / 9);
     camera.sitAt(0);

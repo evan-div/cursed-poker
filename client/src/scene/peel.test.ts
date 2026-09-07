@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PEEK } from '@cursed/shared';
 import { CARD } from './layout.js';
-import { CORNER_LEAD, PEEL_SPAN, nearEdgeAngle, peelAngle, peelPoint } from './peel.js';
+import { CORNER_LEAD, PEEL_SPAN, cornerBend, nearEdgeAngle, peelAngle, peelPoint } from './peel.js';
 
 /**
  * Bending a card off the felt.
@@ -115,12 +115,21 @@ describe('one corner leads', () => {
   });
 
   it('runs the fold smoothly across the card', () => {
+    // The bend angle is the thing that increases across the card, not the
+    // height of the lifted edge: past about 2.3 radians a curling tip starts
+    // coming back down as it rolls over, which is what a real card does.
     let previous = -1;
     for (let x = TRAIL_X; x <= LEAD_X; x += CARD.width / 20) {
-      const height = peelPoint(x, NEAR, 0, PEEK.maxLift).z;
-      expect(height).toBeGreaterThanOrEqual(previous);
-      previous = height;
+      const angle = cornerBend(x, PEEK.maxLift);
+      expect(angle).toBeGreaterThan(previous);
+      previous = angle;
     }
+  });
+
+  it('turns the underside well past vertical at a full pull', () => {
+    // Just past a right angle leaves the face pointing at its owner but nearly
+    // edge-on to them, which reads as a card you cannot quite see.
+    expect(nearEdgeAngle(1)).toBeGreaterThan(Math.PI / 2 + 0.5);
   });
 });
 

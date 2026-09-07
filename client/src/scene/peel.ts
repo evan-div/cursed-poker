@@ -22,8 +22,14 @@ import { CARD } from './layout.js';
  *   z  thickness; +z is up once the card is lying flat
  */
 
-/** Fraction of the card, measured from the near edge, that curls. */
-export const PEEL_SPAN = 0.62;
+/**
+ * Fraction of the card, measured from the near edge, that curls.
+ *
+ * Most of it. A short curl turns a small triangle of the underside toward its
+ * owner and leaves the index somewhere on the flat part still face down on the
+ * felt; the card is technically peeled and there is nothing to read.
+ */
+export const PEEL_SPAN = 0.78;
 
 /**
  * How much more the leading corner curls than the trailing one.
@@ -37,6 +43,22 @@ export const CORNER_LEAD = 0.42;
 export interface PeeledPoint {
   y: number;
   z: number;
+}
+
+/**
+ * How far the card has bent at a given point across its width.
+ *
+ * The corner under the finger leads and the far corner trails, which is what
+ * runs the fold diagonally instead of raising the whole edge like a drawbridge.
+ *
+ * This, and not the height of the lifted edge, is the thing that increases
+ * monotonically across the card: past about 2.3 radians a curling tip starts to
+ * come back *down* as it rolls over, which is correct and briefly looked like a
+ * bug in the fold.
+ */
+export function cornerBend(x: number, bend: number): number {
+  const across = (x + CARD.width / 2) / CARD.width;
+  return bend * (1 - CORNER_LEAD + CORNER_LEAD * across);
 }
 
 /**
@@ -66,9 +88,7 @@ export function peelPoint(x: number, y: number, z: number, bend: number): Peeled
   // The far part of the card never moves. This is the whole point of a peel.
   if (y >= hinge) return { y, z };
 
-  // The corner under the finger leads; the far corner trails.
-  const across = (x + CARD.width / 2) / CARD.width;
-  const angle = bend * (1 - CORNER_LEAD + CORNER_LEAD * across);
+  const angle = cornerBend(x, bend);
   if (!(angle > 1e-4)) return { y, z };
 
   const radius = length / angle;
@@ -89,7 +109,7 @@ export function peelPoint(x: number, y: number, z: number, bend: number): Peeled
  * come round toward the person holding it.
  */
 export function nearEdgeAngle(exposure: number): number {
-  return peelAngle(exposure) * (1 - CORNER_LEAD + CORNER_LEAD * 1);
+  return cornerBend(CARD.width / 2, peelAngle(exposure));
 }
 
 function clamp01(value: number): number {

@@ -12,14 +12,23 @@
  * camera that dragged them back would destroy it. The bias exists to make you
  * *notice* things, never to decide what you look at.
  *
+ * **It turns the head and never lifts it.** Every subject worth looking at — a
+ * face, the Dealer's hood — sits at about the same height, so a bias with a
+ * pitch component pushes *the same way* every time it fires. Each pull is
+ * bounded on its own, but four players acting in turn is four pulls, and they
+ * stack: the player's view walked up off the felt, hand by hand, until they
+ * were sitting at a poker table staring at everyone's chest. Yaw does not have
+ * this problem, because seats are in different directions and the pulls cancel.
+ *
+ * Turning to look at somebody is a yaw movement anyway. You do not raise your
+ * chin to see across a table you are already looking down at.
+ *
  * Pure state and arithmetic: no camera, no scene, no DOM.
  */
 
 export interface AttentionPull {
   /** Yaw the head would drift to, in the same frame as the camera's own. */
   yaw: number;
-  /** Pitch it would drift to. */
-  pitch: number;
   /** 0..1. How hard the game is pulling, which decays over the event's life. */
   weight: number;
   /**
@@ -30,7 +39,6 @@ export interface AttentionPull {
    * over a second it arrives, and the head ends up locked onto whoever acted.
    */
   fromYaw: number | null;
-  fromPitch: number | null;
   /** Epoch ms when this pull began. */
   startedAt: number;
   /** Epoch ms after which this pull is over. */
@@ -106,7 +114,7 @@ export class AttentionDirector {
    * A weaker pull never displaces a stronger one that is still running: an
    * all-in does not get bumped aside because the next player's turn began.
    */
-  focus(yaw: number, pitch: number, weight: number, now: number, durationMs = 1_400): void {
+  focus(yaw: number, weight: number, now: number, durationMs = 1_400): void {
     if (weight <= 0) return;
     if (this.#pull && now < this.#pull.until && this.#pull.weight > weight) return;
 
@@ -116,18 +124,16 @@ export class AttentionDirector {
     // keeps asking walks the player onto it a fraction at a time — which is the
     // unbounded lock this whole mechanism exists to avoid.
     const live = this.#pull;
-    if (live && now < live.until && live.yaw === yaw && live.pitch === pitch) {
+    if (live && now < live.until && live.yaw === yaw) {
       live.until = now + Math.max(1, durationMs);
       return;
     }
 
     this.#pull = {
       yaw,
-      pitch,
       weight: Math.min(weight, 1),
       // Filled in on the first frame, when the player's actual aim is known.
       fromYaw: null,
-      fromPitch: null,
       startedAt: now,
       until: now + Math.max(1, durationMs),
     };
@@ -163,13 +169,8 @@ export class AttentionDirector {
    *
    * Zero when suppressed, expired, or already there.
    */
-  step(
-    currentYaw: number,
-    currentPitch: number,
-    deltaSeconds: number,
-    now: number,
-  ): { yaw: number; pitch: number } {
-    const none = { yaw: 0, pitch: 0 };
+  step(currentYaw: number, deltaSeconds: number, now: number): number {
+    const none = 0;
     if (deltaSeconds <= 0) return none;
     if (this.isSuppressed(now)) return none;
 
@@ -182,14 +183,12 @@ export class AttentionDirector {
 
     // Where the head was when this started, so the bound is measured from there.
     pull.fromYaw ??= currentYaw;
-    pull.fromPitch ??= currentPitch;
 
     // As far as this pull is ever allowed to turn the head: part of the way,
     // never all of it. You finish the movement, or you do not, and either way
     // it was you.
     const reach = this.#options.maxClose * pull.weight;
-    const wantedYaw = pull.fromYaw + (pull.yaw - pull.fromYaw) * reach;
-    const wantedPitch = pull.fromPitch + (pull.pitch - pull.fromPitch) * reach;
+    const wanted = pull.fromYaw + (pull.yaw - pull.fromYaw) * reach;
 
     // Eased out over the pull's life, so attention arrives as a drift and
     // leaves without a snap.
@@ -197,10 +196,7 @@ export class AttentionDirector {
     const gain = clamp01(this.#options.gainPerSecond * deltaSeconds) * clamp01(remaining);
     const cap = this.#options.maxRadiansPerSecond * deltaSeconds;
 
-    return {
-      yaw: limit((wantedYaw - currentYaw) * gain, cap),
-      pitch: limit((wantedPitch - currentPitch) * gain, cap),
-    };
+    return limit((wanted - currentYaw) * gain, cap);
   }
 }
 
