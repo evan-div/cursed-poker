@@ -72,7 +72,7 @@ export class GameScene {
   #seatIndex: number | null | undefined;
   #resizeObserver: ResizeObserver | null = null;
 
-  #free: { x: number; y: number; z: number } | null = null;
+  #free: { x: number; y: number; z: number; at: [number, number, number] } | null = null;
   #avatars = new Map<number, Avatar>();
   #actingSeat: number | null | undefined;
   #handNumber: number | null = null;
@@ -178,9 +178,14 @@ export class GameScene {
         x: number,
         y: number,
         z: number,
+        at?: [number, number, number],
       ) => {
         this.seated.detach();
-        this.#free = { x, y, z };
+        // Aims at the middle of the table unless told otherwise. Anything worth
+        // inspecting up close — a hand on a card — is not in the middle of the
+        // table, and a camera that can only ever look there can only ever
+        // photograph it from behind.
+        this.#free = { x, y, z, at: at ?? [0, 0.8, 0] };
       };
     }
 
@@ -347,7 +352,7 @@ export class GameScene {
 
     if (this.#free) {
       this.seated.camera.position.set(this.#free.x, this.#free.y, this.#free.z);
-      this.seated.camera.lookAt(0, 0.8, 0);
+      this.seated.camera.lookAt(...this.#free.at);
     } else {
       this.seated.update(delta, now);
     }

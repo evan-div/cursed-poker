@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { HAND_LIFT } from '@cursed/shared';
-import { heldCard, holeCardRest, outwardFrom, peelContact, raiseAmount, rightFrom } from './hold.js';
-import { RADIUS, TABLE, seatPoint } from './layout.js';
+import {
+  cardBend,
+  cardSurfacePoint,
+  gripPose,
+  heldCard,
+  holeCardRest,
+  outwardFrom,
+  raiseAmount,
+  rightFrom,
+} from './hold.js';
+import { CARD, RADIUS, TABLE, seatPoint } from './layout.js';
 
 /**
  * Where the cards are, and therefore where the hand has to be.
@@ -96,42 +105,137 @@ describe('picking them up', () => {
   });
 });
 
-describe('where the peeling finger goes', () => {
+describe('where the peeling hand goes', () => {
   it('sits on the near corner of the right-hand card', () => {
     for (const seat of SEATS) {
-      const contact = peelContact(seat, 0, 0);
+      const grip = gripPose(seat, 0, 0).at;
       const card = holeCardRest(seat, 1);
       const out = outwardFrom(seat);
 
       // Nearer the player than the middle of that card, and to its right.
-      const toward = (contact.x - card.x) * out.x + (contact.z - card.z) * out.z;
+      const toward = (grip.x - card.x) * out.x + (grip.z - card.z) * out.z;
       expect(toward).toBeGreaterThan(0);
-      const across = (contact.x - card.x) * rightFrom(seat).x + (contact.z - card.z) * rightFrom(seat).z;
+      const across =
+        (grip.x - card.x) * rightFrom(seat).x + (grip.z - card.z) * rightFrom(seat).z;
       expect(across).toBeGreaterThan(0);
       // And close enough to be on the card at all.
-      expect(distance(contact, card)).toBeLessThan(0.07);
+      expect(distance(grip, card)).toBeLessThan(0.07);
     }
   });
 
-  it('rises as the corner curls', () => {
-    const flat = peelContact(2, 0, 0);
-    const curled = peelContact(2, 1, 0);
+  it('rides the corner up as it curls', () => {
+    const flat = gripPose(2, 0, 0).at;
+    const curled = gripPose(2, 1, 0).at;
     expect(curled.y).toBeGreaterThan(flat.y);
-  });
-
-  it('goes up with the cards when they leave the table', () => {
-    for (const seat of SEATS) {
-      const down = peelContact(seat, 1, 0);
-      const up = peelContact(seat, 1, 1);
-      expect(up.y - down.y).toBeCloseTo(HAND_LIFT.height, 6);
-    }
   });
 
   it('never asks a hand to be under the table', () => {
     for (const seat of SEATS) {
       for (const exposure of [0, 0.5, 1]) {
-        for (const lift of [0, 0.5, 1]) {
-          expect(peelContact(seat, exposure, lift).y).toBeGreaterThan(TABLE.surfaceHeight);
+        for (const lift of [0, 0.25, 0.5, 0.75, 1]) {
+          expect(gripPose(seat, exposure, lift).at.y).toBeGreaterThan(TABLE.surfaceHeight);
+        }
+      }
+    }
+  });
+});
+
+describe('holding a raised pair', () => {
+  it('takes hold of the low edge, not the middle', () => {
+    for (const seat of SEATS) {
+      const grip = gripPose(seat, 1, 1).at;
+      const middle = heldCard(seat, 1, 1).position;
+      // Below the middle of the cards by most of a half-card.
+      expect(middle.y - grip.y).toBeGreaterThan(CARD.height * 0.3);
+    }
+  });
+
+  it('holds them between the two cards rather than off one side', () => {
+    for (const seat of SEATS) {
+      const grip = gripPose(seat, 1, 1).at;
+      const right = rightFrom(seat);
+      const centre = seatPoint(seat, RADIUS.holeCards);
+      const across = (grip.x - centre.x) * right.x + (grip.z - centre.z) * right.z;
+      expect(Math.abs(across)).toBeLessThan(CARD.width / 2);
+    }
+  });
+
+  it('points the fingers up along the cards and the knuckles away from them', () => {
+    for (const seat of SEATS) {
+      const { along, up } = gripPose(seat, 1, 1);
+      const out = outwardFrom(seat);
+
+      // The fingers run up out of the grip toward the far edge, which is the
+      // top of a raised pair.
+      expect(along.y).toBeGreaterThan(0.5);
+      // The back of the hand faces the way the cards' backs do: the fingers lie
+      // flat behind them and only the thumb comes round onto the printed side.
+      // The other way round is four fingers across the faces.
+      expect(up.x * out.x + up.z * out.z).toBeLessThan(-0.5);
+      // Both are unit, and square to each other, or the hand shears.
+      expect(Math.hypot(along.x, along.y, along.z)).toBeCloseTo(1, 6);
+      expect(Math.hypot(up.x, up.y, up.z)).toBeCloseTo(1, 6);
+      expect(along.x * up.x + along.y * up.y + along.z * up.z).toBeCloseTo(0, 6);
+    }
+  });
+
+  it('turns the hand over exactly as far as the cards have come up', () => {
+    expect(gripPose(0, 1, 0).raise).toBe(0);
+    expect(gripPose(0, 1, 1).raise).toBe(1);
+    expect(gripPose(0, 1, 0.5).raise).toBeCloseTo(raiseAmount(0.5), 9);
+  });
+});
+
+describe('the bend', () => {
+  it('curls the near card ahead of the far one', () => {
+    expect(cardBend(0, 0.5)).toBeGreaterThan(cardBend(1, 0.5));
+  });
+
+  it('lets go of the curl as the cards leave the table', () => {
+    const onTheFelt = cardBend(0, 1, 0);
+    expect(onTheFelt).toBeGreaterThan(1);
+    expect(cardBend(0, 1, 0.5)).toBeLessThan(onTheFelt);
+    // Flat in the hand: a card in the air has nothing to bend against.
+    expect(cardBend(0, 1, 1)).toBe(0);
+    expect(cardBend(1, 1, 1)).toBe(0);
+  });
+});
+
+describe('points on a card', () => {
+  it('leaves the middle of the card exactly where the card is', () => {
+    for (const seat of SEATS) {
+      for (const lift of [0, 0.5, 1]) {
+        const middle = cardSurfacePoint(seat, 1, lift, { x: 0, y: 0, z: 0 });
+        const card = heldCard(seat, 1, lift).position;
+        expect(distance(middle, card)).toBeCloseTo(0, 9);
+        expect(middle.y).toBeCloseTo(card.y, 9);
+      }
+    }
+  });
+
+  it('puts the far edge below the near one once the pair is up', () => {
+    for (const seat of SEATS) {
+      const near = cardSurfacePoint(seat, 1, 1, { x: 0, y: -CARD.height / 2, z: 0 });
+      const far = cardSurfacePoint(seat, 1, 1, { x: 0, y: CARD.height / 2, z: 0 });
+      expect(near.y).toBeGreaterThan(far.y);
+    }
+  });
+
+  it('keeps every corner a card away from the middle, at any lift', () => {
+    const half = Math.hypot(CARD.width / 2, CARD.height / 2);
+    for (const seat of SEATS) {
+      for (const lift of [0, 0.3, 1]) {
+        for (const sx of [-1, 1]) {
+          for (const sy of [-1, 1]) {
+            const corner = cardSurfacePoint(seat, 0, lift, {
+              x: (sx * CARD.width) / 2,
+              y: (sy * CARD.height) / 2,
+              z: 0,
+            });
+            const card = heldCard(seat, 0, lift).position;
+            const away = Math.hypot(corner.x - card.x, corner.y - card.y, corner.z - card.z);
+            expect(away).toBeCloseTo(half, 6);
+          }
         }
       }
     }

@@ -41,7 +41,20 @@ export const MATERIALS = {
   floor: standard({ color: '#0c0a09', roughness: 1 }),
   chair: standard({ color: '#1e1713', roughness: 0.9 }),
 
-  skin: standard({ color: '#7d6250', roughness: 0.88 }),
+  /**
+   * Skin, carrying a trace of its own light.
+   *
+   * The one lamp is above the middle of the table, so a hand held up in front of
+   * its owner is turned away from it and reads as a black slab — and the hands
+   * are up exactly when there is something worth watching them do. Faint enough
+   * that it never looks lit, only present.
+   */
+  skin: standard({
+    color: '#7d6250',
+    roughness: 0.88,
+    emissive: '#7d6250',
+    emissiveIntensity: 0.16,
+  }),
   cloth: standard({ color: '#2e2924', roughness: 1 }),
   clothAlt: standard({ color: '#38302a', roughness: 1 }),
   clothThird: standard({ color: '#26282a', roughness: 1 }),

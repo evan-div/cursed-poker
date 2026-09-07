@@ -114,13 +114,19 @@ export const HAND_LIFT = {
   /** How high the cards end up above the felt, in metres. */
   height: 0.26,
   /**
-   * How far they come back toward their owner as they rise.
+   * How far they come back toward their owner as they rise, in metres.
    *
-   * Not too far. Cards held right under the chin put the hands holding them
-   * between the player and the cards, and a screen full of your own forearms is
-   * not an inspection.
+   * Far enough that the arm holding them can actually bend. Cards left out over
+   * the rail are further from the shoulder than the arm is long, so the elbow
+   * locks straight, the hand stops arriving where it was sent, and the pair ends
+   * up balanced on top of the fingers instead of held in them — which is not a
+   * pose that can be fixed by tuning the pose.
+   *
+   * Not much further, though. Cards held right under the chin put the hands
+   * holding them between the player and the cards, and a screen full of your own
+   * forearms is not an inspection.
    */
-  reach: 0.06,
+  reach: 0.19,
   /** How far they tilt up to face their owner at full height, in radians. */
   tilt: 1.15,
   /** How fast released cards fall back to the felt, in units per second. */

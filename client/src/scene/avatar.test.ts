@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { Vector3, type Object3D } from 'three';
+import { BoxGeometry, Mesh, Vector3, type Object3D } from 'three';
 import { Avatar } from './avatar.js';
 import { gazePoint } from './gaze.js';
-import { peelContact } from './hold.js';
+import { gripPose } from './hold.js';
 import { TABLE } from './layout.js';
 
 /**
@@ -121,13 +121,19 @@ function worldOf(avatar: Avatar, object: Object3D): Vector3 {
   return object.getWorldPosition(new Vector3());
 }
 
+/** The far end of one digit — the part that actually touches a card. */
+function tipOf(avatar: Avatar, hand: 0 | 1, finger: number): Vector3 {
+  const knuckle = avatar.hands[hand]!.fingers[finger]!;
+  avatar.group.updateMatrixWorld(true);
+  // The bone hangs off the knuckle along its own +Z, so the tip is its far end.
+  const bone = knuckle.children[0] as Mesh;
+  const length = (bone.geometry as BoxGeometry).parameters.depth * bone.scale.z;
+  return bone.localToWorld(new Vector3(0, 0, length / 2));
+}
+
 /** The tip of the middle finger of a hand, which is what touches a card. */
 function fingertip(avatar: Avatar, hand: 0 | 1): Vector3 {
-  const knuckle = avatar.hands[hand]!.fingers[2]!;
-  avatar.group.updateMatrixWorld(true);
-  // The bone hangs off the knuckle along its own +Z.
-  const bone = knuckle.children[0]!;
-  return worldOf(avatar, bone);
+  return tipOf(avatar, hand, 2);
 }
 
 describe('hands on the cards', () => {
@@ -148,7 +154,7 @@ describe('hands on the cards', () => {
       avatar.setPeek(1, 0);
       settle(avatar);
 
-      const contact = peelContact(seatIndex, 1, 0);
+      const contact = gripPose(seatIndex, 1, 0).at;
       const tip = fingertip(avatar, 0);
       const missed = tip.distanceTo(new Vector3(contact.x, contact.y, contact.z));
       expect(missed, `seat ${seatIndex} missed the card by ${missed.toFixed(3)}m`).toBeLessThan(0.1);
@@ -161,12 +167,42 @@ describe('hands on the cards', () => {
       avatar.setPeek(1, 1);
       settle(avatar);
 
-      const contact = peelContact(seatIndex, 1, 1);
-      const tip = fingertip(avatar, 0);
-      const missed = tip.distanceTo(new Vector3(contact.x, contact.y, contact.z));
-      expect(missed, `seat ${seatIndex} let its cards float by ${missed.toFixed(3)}m`).toBeLessThan(0.12);
+      const grip = gripPose(seatIndex, 1, 1);
+      const at = new Vector3(grip.at.x, grip.at.y, grip.at.z);
+      // The pinch is the gap between the thumb and the fingers, so that is what
+      // has to arrive on the cards — not the wrist, and not one fingertip.
+      const pinch = tipOf(avatar, 0, 0).lerp(fingertip(avatar, 0), 0.5);
+      const missed = pinch.distanceTo(at);
+      expect(missed, `seat ${seatIndex} let its cards float by ${missed.toFixed(3)}m`).toBeLessThan(
+        0.07,
+      );
       // And it is genuinely up off the table, not still on the felt.
-      expect(tip.y).toBeGreaterThan(TABLE.surfaceHeight + 0.15);
+      expect(pinch.y).toBeGreaterThan(TABLE.surfaceHeight + 0.15);
+    }
+  });
+
+  it('pinches the pair rather than balancing it on the fingers', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      avatar.setPeek(1, 1);
+      settle(avatar);
+
+      const grip = gripPose(seatIndex, 1, 1);
+      const at = new Vector3(grip.at.x, grip.at.y, grip.at.z);
+      // `up` comes out of the cards' backs, away from the player.
+      const behind = new Vector3(grip.up.x, grip.up.y, grip.up.z);
+
+      const thumb = tipOf(avatar, 0, 0).sub(at).dot(behind);
+      const finger = fingertip(avatar, 0).sub(at).dot(behind);
+
+      // The cards pass between them: the fingers lie flat behind, the thumb has
+      // come round onto the printed side. Both on one side is a hand holding air
+      // — or a pair balanced on top of the knuckles, which is what this
+      // replaced.
+      expect(thumb, `seat ${seatIndex} thumb`).toBeLessThan(0);
+      expect(finger, `seat ${seatIndex} fingers`).toBeGreaterThan(0);
+      // And close enough together to be gripping rather than spanning.
+      expect(finger - thumb).toBeLessThan(0.07);
     }
   });
 

@@ -3,8 +3,7 @@ import type { Card, ClientView, PresenceFrame, SeatView } from '@cursed/shared';
 import { BACK_CELL, BLANK_CELL, faceCell } from './card-atlas.js';
 import { TOP_FACE, UNDERSIDE, applyPeel, makeCardGeometry, setFaceCell } from './card-mesh.js';
 import { cardAtlasTexture } from './card-texture.js';
-import { peelAngle } from './peel.js';
-import { heldCard, holeCardRest } from './hold.js';
+import { cardBend, heldCard, holeCardRest } from './hold.js';
 import { CARD, boardCardPosition, seatStation, stationAngle } from './layout.js';
 
 /**
@@ -130,22 +129,14 @@ interface HolePose {
 }
 
 /**
- * How far a seat's cards are bent, given the exposure reported for that seat.
+ * How far a seat's cards are bent, and where its hands are.
  *
- * The two cards do not come up together. The near one leads, which is how a
- * person actually does it, and it means a small peek shows one rank rather than
- * half of each.
+ * Both come from `hold.ts`, which the avatar reads too — the card and the hand
+ * holding it have to agree exactly, so neither of them owns the answer.
  */
-export function cardBend(cardIndex: number, exposure: number): number {
-  return peelAngle(clamp01(exposure) * (cardIndex === 0 ? 1.12 : 0.88));
-}
+export { cardBend } from './hold.js';
 
-/**
- * Where a card sits once its owner has picked it up.
- *
- * The numbers come from `hold.ts`, which the avatar reads too — the hand and the
- * card have to agree exactly, so neither of them owns the answer.
- */
+/** Where a card sits once its owner has picked it up. */
 function applyHandPose(mesh: Mesh, seatIndex: number, cardIndex: number, lift: number): void {
   const held = heldCard(seatIndex, cardIndex, lift);
   // Set absolutely, never accumulated: this runs every frame, and a rotation
@@ -240,7 +231,9 @@ export class CardRenderer {
    * to the felt and the near corner curls up, which is a peek. Then, past a
    * full curl, the pair comes off the table entirely and up in front of their
    * owner's face, which is not a peek at all — it is somebody deciding they
-   * would rather be certain than discreet.
+   * would rather be certain than discreet. The bend relaxes on the way up: a
+   * card in the air has nothing to bend against, and a raised pair that stayed
+   * curled looked like it was being wrung out.
    *
    * Called every frame rather than on every view, because both are continuous
    * movements and the view only changes when poker does. The vertex work is
@@ -258,7 +251,7 @@ export class CardRenderer {
       const lift = revealed ? 0 : own ? this.#localLift : (pose?.lift ?? 0);
 
       meshes.forEach((mesh, index) => {
-        const bend = cardBend(index, exposure);
+        const bend = cardBend(index, exposure, lift);
         if (this.#bent.get(mesh) !== bend) {
           this.#bent.set(mesh, bend);
           applyPeel(mesh.geometry as BoxGeometry, bend);
@@ -286,8 +279,4 @@ export class CardRenderer {
     this.#hole.set(seatIndex, meshes);
     return meshes;
   }
-}
-
-function clamp01(value: number): number {
-  return Math.min(Math.max(value, 0), 1);
 }
