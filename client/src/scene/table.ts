@@ -1,5 +1,4 @@
 import {
-  BoxGeometry,
   CylinderGeometry,
   FogExp2,
   Group,
@@ -13,6 +12,7 @@ import {
 } from 'three';
 import { MATERIALS } from './materials.js';
 import { RADIUS, STATION_COUNT, TABLE, facingCentreYaw, stationPoint } from './layout.js';
+import { roundedBox } from './shapes.js';
 
 /**
  * The room and the table.
@@ -91,7 +91,7 @@ function buildTable(): Group {
   // The padded rail players rest their arms on.
   const railTube = (TABLE.railRadius - TABLE.feltRadius) / 2;
   const rail = new Mesh(
-    new TorusGeometry(TABLE.feltRadius + railTube, railTube, 12, 64),
+    new TorusGeometry(TABLE.feltRadius + railTube, railTube, 20, 96),
     MATERIALS.rail,
   );
   rail.rotation.x = -Math.PI / 2;
@@ -102,7 +102,7 @@ function buildTable(): Group {
 
   const skirtHeight = 0.16;
   const skirt = new Mesh(
-    new CylinderGeometry(TABLE.railRadius - 0.01, TABLE.railRadius - 0.05, skirtHeight, 48),
+    new CylinderGeometry(TABLE.railRadius - 0.01, TABLE.railRadius - 0.05, skirtHeight, 64),
     MATERIALS.wood,
   );
   skirt.position.y = TABLE.surfaceHeight - feltThickness - skirtHeight / 2;
@@ -110,12 +110,12 @@ function buildTable(): Group {
   table.add(skirt);
 
   const columnHeight = TABLE.surfaceHeight - feltThickness - skirtHeight;
-  const column = new Mesh(new CylinderGeometry(0.11, 0.16, columnHeight, 24), MATERIALS.wood);
+  const column = new Mesh(new CylinderGeometry(0.11, 0.16, columnHeight, 40), MATERIALS.wood);
   column.position.y = columnHeight / 2;
   column.castShadow = true;
   table.add(column);
 
-  const base = new Mesh(new CylinderGeometry(0.42, 0.46, 0.035, 32), MATERIALS.wood);
+  const base = new Mesh(new CylinderGeometry(0.42, 0.46, 0.035, 48), MATERIALS.wood);
   base.position.y = 0.018;
   base.receiveShadow = true;
   table.add(base);
@@ -126,9 +126,10 @@ function buildTable(): Group {
 /** One chair per station, the Dealer's included. Chairs outlive their occupants. */
 function buildChairs(): Group {
   const chairs = new Group();
-  const seatGeometry = new BoxGeometry(0.44, 0.05, 0.42);
-  const backGeometry = new BoxGeometry(0.44, 0.52, 0.05);
-  const legGeometry = new BoxGeometry(0.05, 0.44, 0.05);
+  // One geometry each, shared across all seven chairs.
+  const seatGeometry = roundedBox(0.44, 0.05, 0.42);
+  const backGeometry = roundedBox(0.44, 0.52, 0.05);
+  const legGeometry = roundedBox(0.05, 0.44, 0.05);
 
   for (let station = 0; station < STATION_COUNT; station++) {
     const chair = new Group();
@@ -169,7 +170,7 @@ function buildLampFixture(): Group {
   cord.position.y = 2.44;
   fixture.add(cord);
 
-  const shade = new Mesh(new CylinderGeometry(0.22, 0.1, 0.16, 24, 1, true), MATERIALS.brass);
+  const shade = new Mesh(new CylinderGeometry(0.22, 0.1, 0.16, 40, 1, true), MATERIALS.brass);
   shade.position.y = 1.96;
   fixture.add(shade);
 

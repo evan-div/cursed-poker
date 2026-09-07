@@ -1,5 +1,4 @@
 import {
-  BoxGeometry,
   CylinderGeometry,
   Group,
   Mesh,
@@ -9,6 +8,7 @@ import {
 import { MATERIALS } from './materials.js';
 import { DEALER_STATION, RADIUS, TABLE, facingCentreYaw, stationPoint } from './layout.js';
 import { buildHand, jointTowards, segment } from './body.js';
+import { roundedBox } from './shapes.js';
 
 /**
  * The Dealer.
@@ -38,7 +38,7 @@ export class Dealer {
     const robe = new Group();
 
     // A column, not a person: no legs, nothing that suggests how he stands.
-    const body = new Mesh(new CylinderGeometry(0.3, 0.62, 1.5, 20, 1, true), MATERIALS.robe);
+    const body = new Mesh(new CylinderGeometry(0.3, 0.62, 1.5, 36, 1, true), MATERIALS.robe);
     body.position.y = 0.75;
     body.castShadow = true;
 
@@ -57,7 +57,7 @@ export class Dealer {
 
     // The hood is a cone with the point up, so the face is a shadowed hollow
     // rather than a shape you can resolve.
-    const hood = new Mesh(new CylinderGeometry(0.06, 0.23, 0.36, 18, 1, true), MATERIALS.robe);
+    const hood = new Mesh(new CylinderGeometry(0.06, 0.23, 0.36, 32, 1, true), MATERIALS.robe);
     hood.position.y = 0.1;
     hood.castShadow = true;
 
@@ -123,7 +123,7 @@ export class Dealer {
 /** A shallow tray in front of the Dealer. Phase 9 fills it with what he keeps. */
 export function buildTrophyTray(): Mesh {
   const at = stationPoint(DEALER_STATION, 0.5);
-  const tray = new Mesh(new BoxGeometry(0.24, 0.012, 0.14), MATERIALS.wood);
+  const tray = new Mesh(roundedBox(0.24, 0.012, 0.14), MATERIALS.wood);
   tray.position.set(at.x, at.y + 0.006, at.z);
   tray.rotation.y = facingCentreYaw(DEALER_STATION);
   tray.receiveShadow = true;

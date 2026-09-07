@@ -53,7 +53,7 @@ export const MATERIALS = {
     color: '#7d6250',
     roughness: 0.88,
     emissive: '#7d6250',
-    emissiveIntensity: 0.16,
+    emissiveIntensity: 0.09,
   }),
   cloth: standard({ color: '#2e2924', roughness: 1 }),
   clothAlt: standard({ color: '#38302a', roughness: 1 }),

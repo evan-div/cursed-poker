@@ -36,7 +36,7 @@ export class ChipRenderer {
   #colour = new Color();
 
   constructor() {
-    const geometry = new CylinderGeometry(CHIP.radius, CHIP.radius, CHIP.height, 14);
+    const geometry = new CylinderGeometry(CHIP.radius, CHIP.radius, CHIP.height, 24);
     const material = new MeshStandardMaterial({ roughness: 0.6, metalness: 0.05 });
     this.#mesh = new InstancedMesh(geometry, material, MAX_CHIPS);
     this.#mesh.castShadow = true;

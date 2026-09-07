@@ -1,4 +1,4 @@
-import { BoxGeometry, CylinderGeometry, Group, Matrix4, Mesh, Quaternion, Vector3 } from 'three';
+import { CylinderGeometry, Group, Matrix4, Mesh, Quaternion, SphereGeometry, Vector3 } from 'three';
 import { GAZE_AWAY, type GazeTarget } from '@cursed/shared';
 import { MATERIALS } from './materials.js';
 import {
@@ -10,6 +10,7 @@ import {
   stationPoint,
 } from './layout.js';
 import { buildHand, jointTowards, segment, type HandParts } from './body.js';
+import { roundedBox } from './shapes.js';
 import { gazePoint } from './gaze.js';
 import { gripPose, shieldPose, type Grip } from './hold.js';
 import { solveArm } from './ik.js';
@@ -128,11 +129,11 @@ export class Avatar {
     this.group.add(this.#body, this.#head);
 
     // Seated: hips on the chair, torso leaning very slightly toward the table.
-    const hips = new Mesh(new BoxGeometry(0.34, 0.2, 0.28), cloth);
+    const hips = new Mesh(roundedBox(0.34, 0.2, 0.28), cloth);
     hips.position.set(0, 0.5, -0.04);
     hips.castShadow = true;
 
-    const torso = new Mesh(new BoxGeometry(0.38, 0.46, 0.24), cloth);
+    const torso = new Mesh(roundedBox(0.38, 0.46, 0.24), cloth);
     torso.position.set(0, 0.82, 0.01);
     torso.rotation.x = -0.09;
     torso.castShadow = true;
@@ -140,7 +141,7 @@ export class Avatar {
     // Shoulders. Without them the head floats: a lit face over a dark torso
     // with a thin neck between reads as a severed one, which is the right
     // effect for entirely the wrong reason.
-    const shoulders = new Mesh(new BoxGeometry(0.42, 0.13, 0.23), cloth);
+    const shoulders = new Mesh(roundedBox(0.42, 0.13, 0.23), cloth);
     shoulders.position.set(0, 1.0, 0.0);
     shoulders.castShadow = true;
 
@@ -159,7 +160,11 @@ export class Avatar {
 
     const neck = new Mesh(new CylinderGeometry(0.048, 0.055, 0.09, 8), MATERIALS.skin);
     neck.position.set(0, 1.08 - NECK_PIVOT.y, 0.02 - NECK_PIVOT.z);
-    const skull = new Mesh(new BoxGeometry(0.165, 0.2, 0.185), MATERIALS.skin);
+    // A head is the one part of a person nobody reads as a shape — they read it
+    // as a face, even when there is no face on it. A cube up there is a cube;
+    // a squashed sphere at the same size is somebody looking at you.
+    const skull = new Mesh(new SphereGeometry(0.5, 16, 10), MATERIALS.skin);
+    skull.scale.set(0.165, 0.2, 0.185);
     skull.position.set(0, 1.21 - NECK_PIVOT.y, 0.02 - NECK_PIVOT.z);
     skull.castShadow = true;
     this.#skull = skull;
@@ -323,9 +328,10 @@ export class Avatar {
     // the fingers behind it and the thumb across the front. One becomes the
     // other as the cards leave the table.
     const pressing = this.#curl * 0.8;
-    // Barely folded. Fingers hooked into a claw put their knuckles out in front
-    // of the cards; fingers lying flat along the backs put nothing in the way.
-    const holding = 0.12;
+    // A hand's own resting shape, and no more. Fingers hooked into a claw put
+    // their knuckles out in front of the cards; fingers lying flat along the
+    // backs put nothing in the way.
+    const holding = 0;
     arm.hand.shape(
       pressing + (holding - pressing) * grip.raise,
       grip.raise * this.#reach,
@@ -474,8 +480,12 @@ export class Avatar {
     // table no matter what angle the arm arrived at.
     const hand = buildHand({
       material: MATERIALS.skin,
-      palm: [0.085, 0.028, 0.09],
-      fingerLength: 0.055,
+      // Two proportions worth getting right, because a hand is the part of this
+      // body a player sees closest. A palm much flatter than this reads as a
+      // paddle once its edges are rounded; fingers much shorter than the palm
+      // read as a mitten with lines drawn on it. Real ones are about equal.
+      palm: [0.078, 0.034, 0.08],
+      fingerLength: 0.062,
       fingerThickness: 0.019,
       // The right arm is the one built with `side = -1`, and its thumb belongs
       // on the other side of the palm from its opposite number's.
@@ -522,8 +532,8 @@ const FORWARD = new Vector3(0, 0, 1);
  * their tips, with a card's thickness of daylight between.
  */
 const PINCH = {
-  flat: { y: -0.048, z: 0.071 },
-  held: { y: -0.017, z: 0.042 },
+  flat: { y: -0.056, z: 0.067 },
+  held: { y: -0.020, z: 0.042 },
 } as const;
 
 /**

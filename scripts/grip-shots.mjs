@@ -91,5 +91,18 @@ for (const [name, at] of Object.entries({
   await pages[1].screenshot({ path: `${OUT}/${name}.png` });
 }
 
+// What all that rounding costs. Triangles are the number to watch: every hard
+// edge traded for a soft one is vertices, and this scene has a lot of edges.
+console.log('budget:', JSON.stringify(await pages[1].evaluate(() => window.__sceneStats())));
+
+for (const [name, at] of Object.entries({
+  wide: [2.4, 1.8, 2.4],
+  overhead: [0.01, 3.0, 0.01],
+})) {
+  await pages[1].evaluate((p) => window.__freeLook?.(p[0], p[1], p[2]), at);
+  await pages[1].waitForTimeout(600);
+  await pages[1].screenshot({ path: `${OUT}/${name}.png` });
+}
+
 console.log(problems.length ? `PROBLEMS:\n${[...new Set(problems)].join('\n')}` : 'no page errors');
 await browser.close();

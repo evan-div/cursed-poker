@@ -1,4 +1,5 @@
-import { BoxGeometry, Group, Mesh, Quaternion, Vector3, type Material } from 'three';
+import { Group, Mesh, Quaternion, Vector3, type Material } from 'three';
+import { bone, roundedBox } from './shapes.js';
 
 /**
  * Shared building blocks for bodies.
@@ -13,6 +14,22 @@ const FORWARD = new Vector3(0, 0, 1);
 
 /** How far a knuckle folds when the hand is shut, in radians. */
 const FULL_CURL = 1.35;
+
+/**
+ * How far a hand is folded when it is doing nothing at all.
+ *
+ * Not flat. A relaxed hand keeps a little curl in every finger; a hand with
+ * none reads as a starfish pressed against the felt, and six of them around a
+ * table look like the table is being held down. So `close` runs from a resting
+ * hand to a closed one rather than from a splayed one, and nothing outside here
+ * has to remember to ask for a hand's own default shape.
+ */
+const RESTING_CURL = 0.16;
+
+/** Where a knuckle sits for a given `close`, in radians. */
+function fold(close: number): number {
+  return (RESTING_CURL + clamp01(close) * (1 - RESTING_CURL)) * FULL_CURL;
+}
 
 /**
  * How far the thumb is angled in across the palm, and how far down it sits.
@@ -51,9 +68,17 @@ export function jointTowards(from: Vector3, to: Vector3): { joint: Group; length
   return { joint, length };
 }
 
-/** A limb segment filling a joint's length, centred so the pivot is at the top. */
+/**
+ * A limb segment filling a joint's length, centred so the pivot is at the top.
+ *
+ * `width` and `depth` describe how thick the limb is; the bone is round, so the
+ * thinner of the two wins and the other is applied as a squash. An upper arm is
+ * not a cylinder, but it is a great deal closer to one than to a plank.
+ */
 export function segment(length: number, width: number, depth: number, material: Material): Mesh {
-  const mesh = new Mesh(new BoxGeometry(width, depth, length), material);
+  const thickness = Math.min(width, depth);
+  const mesh = new Mesh(bone(length, thickness), material);
+  mesh.scale.set(width / thickness, depth / thickness, 1);
   mesh.position.z = length / 2;
   mesh.castShadow = true;
   return mesh;
@@ -118,16 +143,11 @@ export function buildHand(options: HandOptions): HandParts {
   const [across, thick, along] = options.palm;
   const splay = options.splay ?? 0.16;
 
-  const palm = new Mesh(new BoxGeometry(across, thick, along), options.material);
+  const palm = new Mesh(roundedBox(across, thick, along), options.material);
   palm.castShadow = true;
   group.add(palm);
 
   const fingers: Group[] = [];
-  const geometry = new BoxGeometry(
-    options.fingerThickness,
-    options.fingerThickness * 0.8,
-    options.fingerLength,
-  );
 
   /** A finger hinged at its knuckle, with the bone hanging off in front. */
   const digit = (name: string, at: [number, number, number], scale: number, yaw: number): Group => {
@@ -136,11 +156,18 @@ export function buildHand(options: HandOptions): HandParts {
     knuckle.position.set(at[0], at[1], at[2]);
     knuckle.rotation.y = yaw;
 
-    const bone = new Mesh(geometry, options.material);
-    bone.scale.z = scale;
-    bone.position.z = (options.fingerLength * scale) / 2;
-    bone.castShadow = true;
-    knuckle.add(bone);
+    // Built at its own length rather than scaled to it: a capsule stretched
+    // along Z gets stretched domes, and a fingertip is the one part of this
+    // hand anybody ever looks at closely.
+    const length = options.fingerLength * scale;
+    const finger = new Mesh(bone(length, options.fingerThickness), options.material);
+    finger.scale.y = 0.8;
+    finger.position.z = length / 2;
+    finger.castShadow = true;
+    // How far out the tip is, for anything that needs to find it. Reading it off
+    // the geometry means knowing what kind of solid a finger happens to be.
+    finger.userData.length = length;
+    knuckle.add(finger);
 
     group.add(knuckle);
     fingers.push(knuckle);
@@ -170,14 +197,14 @@ export function buildHand(options: HandOptions): HandParts {
   fingers.unshift(thumb);
 
   const shape = (close: number, oppose: number) => {
-    const closed = clamp01(close);
+    const folded = fold(close);
     const opposed = clamp01(oppose);
     for (let i = 1; i < fingers.length; i++) {
-      fingers[i]!.rotation.x = closed * FULL_CURL;
+      fingers[i]!.rotation.x = folded;
     }
     // The thumb folds less than the fingers do, and swings further across the
     // palm as it is asked to oppose them.
-    thumb.rotation.x = closed * FULL_CURL * 0.6 + opposed * 0.55;
+    thumb.rotation.x = folded * 0.6 + opposed * 0.55;
     thumb.rotation.y = -side * (THUMB_YAW + opposed * 0.12);
   };
 

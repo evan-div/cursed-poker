@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BoxGeometry, Mesh, Vector3, type Object3D } from 'three';
+import { Mesh, Vector3, type Object3D } from 'three';
 import { Avatar } from './avatar.js';
 import { gazePoint } from './gaze.js';
 import { gripPose } from './hold.js';
@@ -127,8 +127,7 @@ function tipOf(avatar: Avatar, hand: 0 | 1, finger: number): Vector3 {
   avatar.group.updateMatrixWorld(true);
   // The bone hangs off the knuckle along its own +Z, so the tip is its far end.
   const bone = knuckle.children[0] as Mesh;
-  const length = (bone.geometry as BoxGeometry).parameters.depth * bone.scale.z;
-  return bone.localToWorld(new Vector3(0, 0, length / 2));
+  return bone.localToWorld(new Vector3(0, 0, (bone.userData.length as number) / 2));
 }
 
 /** The tip of the middle finger of a hand, which is what touches a card. */
