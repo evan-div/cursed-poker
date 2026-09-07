@@ -1,4 +1,4 @@
-import { CylinderGeometry, Group, Matrix4, Mesh, Quaternion, SphereGeometry, Vector3 } from 'three';
+import { CylinderGeometry, Group, Matrix4, Mesh, Quaternion, Vector3 } from 'three';
 import { GAZE_AWAY, type GazeTarget } from '@cursed/shared';
 import { MATERIALS } from './materials.js';
 import {
@@ -160,11 +160,16 @@ export class Avatar {
 
     const neck = new Mesh(new CylinderGeometry(0.048, 0.055, 0.09, 8), MATERIALS.skin);
     neck.position.set(0, 1.08 - NECK_PIVOT.y, 0.02 - NECK_PIVOT.z);
-    // A head is the one part of a person nobody reads as a shape — they read it
-    // as a face, even when there is no face on it. A cube up there is a cube;
-    // a squashed sphere at the same size is somebody looking at you.
-    const skull = new Mesh(new SphereGeometry(0.5, 16, 10), MATERIALS.skin);
-    skull.scale.set(0.165, 0.2, 0.185);
+    // A head, and specifically not an ellipsoid.
+    //
+    // A squashed sphere is the obvious way to round off a cube of a head and it
+    // is wrong, because a sphere tapers to a point at its bottom pole. The jaw
+    // narrows to nothing right where it meets the neck, so the lower quarter of
+    // the head reads as *more neck* — and with only four and a half centimetres
+    // of neck actually showing, that trebles it. Every player at the table
+    // turned into a lollipop on a stalk. A rounded box keeps its width down to
+    // the jaw, which is the whole job.
+    const skull = new Mesh(roundedBox(0.165, 0.2, 0.185), MATERIALS.skin);
     skull.position.set(0, 1.21 - NECK_PIVOT.y, 0.02 - NECK_PIVOT.z);
     skull.castShadow = true;
     this.#skull = skull;
