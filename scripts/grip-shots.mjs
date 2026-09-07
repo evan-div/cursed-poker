@@ -46,31 +46,51 @@ await pages[0].waitForSelector('.table-canvas', { timeout: 15_000 });
 await pages[0].waitForTimeout(2_000);
 
 const me = pages[0];
+
+/**
+ * Where the pointer is, in page coordinates.
+ *
+ * Tracked rather than assumed, because the seated camera takes the pointer
+ * lock: once it has, *every* mouse move turns the head, button or no button.
+ * Jumping the cursor somewhere convenient before a drag is therefore not a
+ * reposition, it is a look — and a jump to the top of the window is a look at
+ * the ceiling, which is what the first attempt at this photographed.
+ *
+ * So each gesture starts exactly where the last one ended, and the run is laid
+ * out to leave enough room below for the longest one.
+ */
+let at = 200;
+
+/** Drags on the canvas the way a player turns their head. */
 async function look(dx, dy) {
-  await me.mouse.move(640, 440);
+  await me.mouse.move(640, at);
   await me.mouse.down();
-  for (let i = 1; i <= 10; i++) await me.mouse.move(640 + (dx * i) / 10, 440 + (dy * i) / 10);
+  for (let i = 1; i <= 10; i++) await me.mouse.move(640 + (dx * i) / 10, at + (dy * i) / 10);
   await me.mouse.up();
+  at += dy;
   await me.waitForTimeout(500);
+}
+
+/** Pulls the cards toward the player, the way a peek works. */
+async function pull(pixels, steps) {
+  for (let i = 1; i <= steps; i++) await me.mouse.move(640, at + (pixels * i) / steps);
+  at += pixels;
 }
 
 await look(0, 130);
 await me.waitForSelector('.hud-hint .hint-strong', { timeout: 90_000 });
 
-// Peel, then keep pulling past the break so the pair leaves the felt.
-//
-// The whole drag starts near the top of the window, because a full pull is
-// most of five hundred pixels and a gesture that runs off the bottom edge
-// stops being delivered part way down — which looks exactly like a peek that
-// will not break through, and cost an afternoon once.
-await me.mouse.move(640, 170);
+// Peel, then keep pulling past the break so the pair leaves the felt. Four
+// hundred pixels all told, from a start high enough that none of it runs off
+// the bottom edge — a drag that leaves the window stops being delivered part
+// way down, which looks exactly like a peek that will not break through.
 await me.mouse.down({ button: 'right' });
-for (let i = 1; i <= 14; i++) await me.mouse.move(640, 170 + (150 * i) / 14);
+await pull(150, 14);
 await me.waitForTimeout(400);
 await me.screenshot({ path: `${OUT}/peeling.png` });
 console.log('peeling:', JSON.stringify(await me.evaluate(() => window.__bodies().me)));
 
-for (let i = 1; i <= 20; i++) await me.mouse.move(640, 320 + (400 * i) / 20);
+await pull(250, 20);
 await me.waitForTimeout(700);
 await me.screenshot({ path: `${OUT}/lifted-own-eyes.png` });
 console.log('lifted:', JSON.stringify(await me.evaluate(() => window.__bodies().me)));
