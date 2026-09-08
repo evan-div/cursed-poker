@@ -168,15 +168,39 @@ phase's three real bugs were invisible in a screenshot.
 
 ---
 
-## Phase 5 — The Dealer and atmosphere
+## Phase 5 — The Dealer and atmosphere — in progress
 
-- [ ] Dealer model: tall, hooded, face lost in black, two dim red eyes
-- [ ] Lighting that lets a lifted card be read without flattening the room —
-      the current lamp leaves a steeply tilted card in its own shadow
-- [ ] Deal / watch / lean / rise animation set
-- [ ] Independent head tracking; unnatural stillness; occasional twitch
-- [ ] Lighting pass; positional audio foundation
-- [ ] `HorrorDirector` v1 driven by player count, elapsed time, sacrifices, eliminations
+The decision the phase turns on: **the Dealer is a server-owned fact.** He
+rides the presence channel, identically, to everybody, at the same tick. Six
+clients each inventing their own would produce six different evenings, and
+nobody could ever say *did you see that?* and be answered.
+
+- [x] Dealer model: tall, hooded, face lost in black, two dim red eyes that
+      burn harder as the room turns
+- [x] Lighting that lets a lifted card be read without flattening the room — a
+      short-range light carried at the player's own eye, up only while their
+      cards are, dying well before the felt
+- [x] Deal / watch / lean / rise posture set, decided on the server
+- [x] Independent head tracking; **no idle at all** (a test asserts he does not
+      move by a millionth of a metre over a minute); twitches replicated as
+      timestamped moments rather than flags
+- [x] Lighting pass driven by dread — the lamp dims, reddens and narrows, fog
+      thickens, and past a threshold the light stops being quite steady
+- [x] Positional audio foundation: cues as pure data, sounds synthesised rather
+      than loaded, nothing audible that is not already public
+- [x] `HorrorDirector` v1 (`dreadLevel`) driven by player count, elapsed time,
+      sacrifices, eliminations — every input only ever increases, so the room
+      never gets better
+
+Two walls tested through whole running matches, both verified to fail when
+deliberately broken: the cards cannot reach the Dealer, and the Dealer cannot
+reach the cards (his chance and the shuffle's chance are different objects).
+
+Still open in this phase:
+
+- [ ] Frame times on real hardware; the automated runs use software rendering
+- [ ] Tune the dread curve against a played-out match rather than against
+      reasoning about one
 
 ---
 
