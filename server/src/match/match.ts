@@ -2,6 +2,7 @@ import {
   DEFAULT_BLIND_STRUCTURE,
   MAX_PLAYERS,
   MIN_PLAYERS,
+  PRESENCE,
   SEAT_COUNT,
   levelAt,
   levelIndexForElapsed,
@@ -26,6 +27,7 @@ import {
   type RandomSource,
 } from '../poker/index.js';
 import { SystemClock, type Clock, type TimerHandle } from './clock.js';
+import { createDealer, updateDealer, type DealerContext } from './dealer.js';
 import {
   elapsedMs,
   findPlayer,
@@ -41,7 +43,7 @@ import {
   reportPresence,
   resetForHand,
 } from './presence.js';
-import { presenceFrame, projectForViewer } from './projection.js';
+import { presenceFrame, projectForViewer, roomDread } from './projection.js';
 
 /**
  * The outer state machine: one lobby, from empty room to last player standing.
@@ -94,6 +96,8 @@ export interface MatchOptions {
   seatCount?: number;
   clock?: Clock;
   rng?: RandomSource;
+  /** The Dealer's source of chance. Never the deck's — see `Match#dealerRng`. */
+  dealerRng?: RandomSource;
   timings?: Partial<MatchTimings>;
 }
 
@@ -103,6 +107,16 @@ export class Match {
   readonly state: MatchState;
   readonly #clock: Clock;
   readonly #rng: RandomSource;
+  /**
+   * The Dealer's own source of chance, and emphatically not the deck's.
+   *
+   * If he drew from `#rng`, the shuffle would depend on how often he had
+   * twitched — the supernatural layer reaching the cards through a side door,
+   * which is the one thing this whole project is arranged to prevent. Two
+   * sources, always, and `match.test.ts` asserts the deck is unmoved by an hour
+   * of him fidgeting.
+   */
+  readonly #dealerRng: RandomSource;
   readonly #timings: MatchTimings;
   readonly #listeners = new Set<MatchListener>();
 
@@ -113,6 +127,7 @@ export class Match {
   constructor(options: MatchOptions) {
     this.#clock = options.clock ?? new SystemClock();
     this.#rng = options.rng ?? new CryptoRandomSource();
+    this.#dealerRng = options.dealerRng ?? new CryptoRandomSource();
     this.#timings = { ...DEFAULT_TIMINGS, ...options.timings };
 
     this.state = {
@@ -125,6 +140,9 @@ export class Match {
       structure: options.structure ?? DEFAULT_BLIND_STRUCTURE,
       table: null,
       presence: createPresence(),
+      dealer: createDealer(this.#clock.now()),
+      startingPlayers: 0,
+      sacrifices: 0,
       clockElapsedMs: 0,
       clockRunningSince: null,
       actionDeadline: null,
@@ -144,6 +162,44 @@ export class Match {
 
   viewFor(playerId: string | null): ClientView {
     return projectForViewer(this.state, playerId, this.#clock.now());
+  }
+
+  /**
+   * Moves the bodies on. Called on the presence tick, before it broadcasts.
+   *
+   * Separate from `presenceFor` on purpose: a projection that mutates is a
+   * projection nobody can call twice, and this one is called from a loop over
+   * every room in the process. This is where the Dealer thinks.
+   */
+  tick(): void {
+    if (this.#disposed) return;
+    const now = this.#clock.now();
+    updateDealer(this.state.dealer, this.#dealerContext(now), this.#dealerRng, now);
+  }
+
+  /**
+   * The world the Dealer is allowed to react to.
+   *
+   * Assembled here, from public facts only. Every field is something a person
+   * sitting at this table could see for themselves; nothing in it comes from a
+   * deck, a hole card or a hand ranking. See `dealer.ts` for why that boundary
+   * is the whole point, and `dealer.test.ts` for the test that holds it.
+   */
+  #dealerContext(now: number): DealerContext {
+    const table = this.state.table;
+    const hand = table?.hand ?? null;
+    const seated = (table?.seats ?? []).filter((seat) => seat.seated).map((s) => s.seatIndex);
+
+    return {
+      working: this.state.phase === 'HAND_IN_PROGRESS' && hand === null,
+      handInProgress: this.state.phase === 'HAND_IN_PROGRESS',
+      actingSeat: hand?.actingSeat ?? null,
+      seats: seated,
+      liftedSeats: this.state.presence
+        .filter((record) => record.lift > 0.15 && now - record.lastReportAt < PRESENCE.graceMs)
+        .map((record) => record.seatIndex),
+      dread: roomDread(this.state, now),
+    };
   }
 
   /** The table's bodies. Public to everyone, so there is no viewer argument. */
@@ -272,6 +328,9 @@ export class Match {
       seatCount: this.state.seatCount,
     });
     this.state.status = 'IN_PROGRESS';
+    // Fixed here and never touched again: the room's dread measures empty
+    // chairs against how many were filled when the evening began.
+    this.state.startingPlayers = this.state.players.length;
     this.state.clockRunningSince = this.#clock.now();
 
     this.#emit({ type: 'MATCH_STARTED', seatCount: this.state.players.length });

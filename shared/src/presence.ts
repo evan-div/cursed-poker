@@ -27,6 +27,7 @@
  * signal to roughly what a person could actually perceive, and it is also
  * one byte instead of twelve.
  */
+import type { DealerPresence } from './dealer.js';
 
 /**
  * What somebody appears to be looking at.
@@ -257,4 +258,21 @@ export interface SeatPresence {
 export interface PresenceFrame {
   serverTime: number;
   seats: SeatPresence[];
+  /**
+   * The Dealer, who is a body at this table too.
+   *
+   * He rides this channel rather than the per-viewer one for the reason the
+   * channel exists: there is no hidden half. Everybody sees the same head turn
+   * at the same moment, which is the only way "did you see that?" is ever a
+   * question worth asking. See `dealer.ts`.
+   */
+  dealer: DealerPresence;
+  /**
+   * How bad the room has got, 0..1.
+   *
+   * Derived on the server from facts every client already has — elapsed time,
+   * empty chairs, sacrifices — and broadcast anyway, so that lighting, fog and
+   * the Dealer's tempo cannot drift apart between one client and the next.
+   */
+  dread: number;
 }

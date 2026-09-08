@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GAZE_AWAY, PRESENCE, type PresenceFrame, type PresenceInput } from '@cursed/shared';
+import { GAZE_AWAY, PRESENCE, type PresenceInput } from '@cursed/shared';
 import {
   createPresence,
   forgetSeat,
@@ -8,6 +8,7 @@ import {
   projectPresence,
   reportPresence,
   resetForHand,
+  type SeatFrame,
   type PresenceState,
 } from './presence.js';
 
@@ -28,7 +29,7 @@ function input(over: Partial<PresenceInput> = {}): PresenceInput {
   return { gaze: GAZE_AWAY, peek: 0, lift: 0, lean: 0, handlingChips: false, ...over };
 }
 
-function frame(presence: PresenceState, now: number, seats = [0, 1, 2, 3]): PresenceFrame {
+function frame(presence: PresenceState, now: number, seats = [0, 1, 2, 3]): SeatFrame {
   return projectPresence(presence, { seatIndices: seats, connected: new Set(seats) }, now);
 }
 

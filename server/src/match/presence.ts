@@ -221,11 +221,21 @@ export interface PresenceFrameOptions {
  * is a property worth keeping, because it is what makes this a cheap broadcast
  * instead of six projections.
  */
+/**
+ * The seats' half of a presence frame.
+ *
+ * Deliberately not the whole frame: the Dealer rides the same channel but is
+ * not a seat, and this module has no business knowing about him. `projection.ts`
+ * is the one place the two halves are put together, because it is the one place
+ * allowed to build something a client receives.
+ */
+export type SeatFrame = Pick<PresenceFrame, 'serverTime' | 'seats'>;
+
 export function projectPresence(
   presence: PresenceState,
   options: PresenceFrameOptions,
   now: number,
-): PresenceFrame {
+): SeatFrame {
   const seats: SeatPresence[] = options.seatIndices.map((seatIndex) => {
     const record = findSeat(presence, seatIndex);
     const present = options.connected.has(seatIndex);

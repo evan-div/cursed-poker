@@ -374,6 +374,13 @@ describe('bodies over the wire', () => {
 
     // The frame is body state only. A card could not hide in it, because
     // there is nowhere in the shape for one to be.
+    //
+    // This list is an allowlist rather than a denylist on purpose: adding a
+    // field to the presence protocol has to be a deliberate act that fails this
+    // test first and gets argued for here. The Dealer's half was added in
+    // Phase 5 and is held to exactly the same standard — he is a body, he has a
+    // posture and something he is looking at, and there is no room in his shape
+    // for a card either.
     const allowed = new Set([
       'serverTime',
       'seats',
@@ -386,6 +393,11 @@ describe('bodies over the wire', () => {
       'handlingChips',
       'stillMs',
       'present',
+      // The Dealer, and the room he keeps.
+      'dealer',
+      'posture',
+      'twitchAt',
+      'dread',
     ]);
     let leaves = 0;
     const walk = (node: unknown): void => {

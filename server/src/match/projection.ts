@@ -10,7 +10,9 @@ import {
   type SeatView,
   type SelfView,
 } from '@cursed/shared';
+import { dreadLevel } from '@cursed/shared';
 import { legalActions } from '../poker/index.js';
+import { projectDealer } from './dealer.js';
 import { elapsedMs, findPlayer, type MatchState, type PlayerRecord } from './match-state.js';
 import { hasPeeked, projectPresence } from './presence.js';
 
@@ -82,7 +84,27 @@ export function presenceFrame(match: MatchState, now: number): PresenceFrame {
       .map((player) => player.seatIndex),
   );
 
-  return projectPresence(match.presence, { seatIndices, connected }, now);
+  return {
+    ...projectPresence(match.presence, { seatIndices, connected }, now),
+    dealer: projectDealer(match.dealer, now),
+    dread: roomDread(match, now),
+  };
+}
+
+/**
+ * How bad the room has got.
+ *
+ * Every term is a public fact — the clock, the empty chairs, what people have
+ * given up — so this is safe to hand to everybody, and it has to be, or the
+ * lighting in one player's room would not match the lighting in another's.
+ */
+export function roomDread(match: MatchState, now: number): number {
+  return dreadLevel({
+    startingPlayers: match.startingPlayers,
+    eliminated: match.players.filter((player) => player.eliminatedAt !== null).length,
+    elapsedMs: elapsedMs(match, now),
+    sacrifices: match.sacrifices,
+  });
 }
 
 function projectPlayer(hostPlayerId: string) {

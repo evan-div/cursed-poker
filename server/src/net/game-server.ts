@@ -352,6 +352,9 @@ export class GameServer {
       for (const [code, sockets] of this.#roomSockets) {
         const room = this.rooms.get(code);
         if (!room || sockets.size === 0) continue;
+        // The Dealer thinks on this tick too. He is a body at this table and
+        // he moves on the same clock the rest of them do.
+        room.match.tick();
         const frame = room.match.presenceFor();
         for (const connection of sockets.values()) connection.send('presence', frame);
         talkedToAnyone = true;
