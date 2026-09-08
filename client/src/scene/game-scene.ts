@@ -10,6 +10,8 @@ import {
 } from 'three';
 import type { ClientView, GazeTarget, MatchEvent, PresenceFrame } from '@cursed/shared';
 import { buildRoom, type Room } from './table.js';
+import { cuesFor, dealerRiseCue } from '../audio/cues.js';
+import { SILENT_ROOM, startRoomAudio, type RoomAudio } from '../audio/engine.js';
 import { SeatedCamera } from './seated-camera.js';
 import { Avatar } from './avatar.js';
 import { Dealer, buildTrophyTray } from './dealer.js';
@@ -79,6 +81,11 @@ export class GameScene {
   #lastPresence: PresenceFrame | null = null;
   #dealer = new Dealer();
   #room!: Room;
+  #audio: RoomAudio = SILENT_ROOM;
+  /** The blind a chip sound is measured against. See `cues.ts`. */
+  #bigBlind = 0;
+  /** His last posture, so standing up can be heard once rather than every tick. */
+  #dealerPosture: PresenceFrame['dealer']['posture'] = 'STILL';
   #cards = new CardRenderer();
   #chips = new ChipRenderer();
 
@@ -181,6 +188,12 @@ export class GameScene {
         })),
       });
 
+      // Whether the room is actually making a noise. Web Audio cannot run
+      // under a test, so this is how `scripts/audio-check.mjs` finds out.
+      (window as unknown as { __audio?: unknown }).__audio = () => ({
+        running: this.#audio.running,
+      });
+
       (window as unknown as { __freeLook?: unknown }).__freeLook = (
         x: number,
         y: number,
@@ -209,6 +222,7 @@ export class GameScene {
    * with the same view leaves the table identical.
    */
   apply(view: ClientView): void {
+    this.#bigBlind = view.level?.bigBlind ?? this.#bigBlind;
     if (this.#seatIndex !== view.you.seatIndex) {
       this.#seatIndex = view.you.seatIndex;
       this.seated.sitAt(view.you.seatIndex);
@@ -241,6 +255,14 @@ export class GameScene {
     // disagree about what they had just watched.
     this.#dealer.apply(frame.dealer, frame.dread, frame.serverTime);
     this.#room.setDread(frame.dread);
+    this.#audio.setDread(frame.dread);
+
+    // Standing is the one thing he does that has a sound, and it is heard once
+    // — on the tick the posture changes, not on every tick he spends upright.
+    if (frame.dealer.posture !== this.#dealerPosture) {
+      if (frame.dealer.posture === 'RISEN') this.#audio.play(dealerRiseCue());
+      this.#dealerPosture = frame.dealer.posture;
+    }
     for (const seat of frame.seats) {
       const avatar = this.#avatars.get(seat.seatIndex);
       if (!avatar) continue;
@@ -261,8 +283,23 @@ export class GameScene {
    * narration the whole table receives, so nobody's attention is pulled toward
    * something they were not entitled to notice.
    */
+  /**
+   * Turns the sound on. Must be called from inside a real user gesture.
+   *
+   * Browsers will not start an `AudioContext` before one, and one created too
+   * early is created suspended and stays that way without saying so. Until this
+   * is called everything talks to a silent room instead — see `SILENT_ROOM`.
+   */
+  startAudio(): void {
+    if (this.#audio.running) return;
+    this.#audio = startRoomAudio();
+  }
+
   notify(events: MatchEvent[]): void {
     const now = performance.now();
+    for (const event of events) {
+      for (const cue of cuesFor(event, { bigBlind: this.#bigBlind })) this.#audio.play(cue);
+    }
     for (const event of events) {
       switch (event.type) {
         case 'PLAYER_ACTED': {
@@ -363,6 +400,9 @@ export class GameScene {
     this.#cards.updatePoses();
     this.#dealer.update(delta);
     this.#room.update(delta);
+    // The listener goes wherever the player's head goes, so a chip pushed in
+    // behind you is behind you.
+    this.#audio.follow(this.seated.camera);
     for (const avatar of this.#avatars.values()) avatar.update(delta);
 
     if (this.#free) {

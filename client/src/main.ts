@@ -229,6 +229,11 @@ function renderTable(current: ClientView): void {
     // Pointer lock is offered, never imposed: clicking the table takes it,
     // Escape gives it back, and everything still works either way.
     canvas.addEventListener('pointerdown', (event) => {
+      // The first click is also what the browser needs before it will let any
+      // sound out — see `startRoomAudio`. Doing it here rather than behind a
+      // settings toggle means the room has a sound the moment anybody touches
+      // the table, and never before.
+      scene?.startAudio();
       if (event.button === 0 && !scene?.seated.locked) scene?.seated.requestLock();
     });
     scene.seated.onLockChanged = (locked) => {
