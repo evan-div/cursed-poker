@@ -55,11 +55,44 @@ const HEAD_LIMITS = {
  */
 const MAX_HEAD_TURN_PER_SECOND = 1.15;
 
+/**
+ * How big he is, in metres.
+ *
+ * The first pass had him two metres tall and **one and a quarter metres wide at
+ * the hem** — on a table whose entire playing surface is one metre thirty-two
+ * across. Standing where he stands, the skirt reached a full twenty centimetres
+ * *inside* the felt: he was not looming over the table, he was standing through
+ * it. What that reads as, correctly, is a gigantic cone.
+ *
+ * The height was never really the problem. Cutting the hem almost in half is
+ * what turns him back into a figure, because the thing that made him a cone was
+ * the ratio between his base and his head — three and a half to one, where a
+ * robed person is closer to two.
+ *
+ * He is still the tallest thing in the room by a long way. Seated players top
+ * out at 1.31, so at 1.83 he stands half a metre over every one of them, and
+ * over two metres once he decides to stand.
+ */
+const SIZE = {
+  /** Floor to shoulder. The column. */
+  robeHeight: 1.42,
+  /** Radius at the shoulder, and where it pools on the floor. */
+  robeTop: 0.22,
+  robeHem: 0.36,
+  shoulderRadius: 0.24,
+  /** Where the head is hinged. */
+  neck: 1.52,
+  hoodRadius: 0.17,
+  hoodPeak: 0.05,
+  hoodHeight: 0.3,
+  hollowRadius: 0.13,
+} as const;
+
 /** Where his head is hinged, in his own space. */
-const NECK_PIVOT = { y: 1.62, z: 0.02 } as const;
+const NECK_PIVOT = { y: SIZE.neck, z: 0.02 } as const;
 
 /** How much taller he gets when he stands, in metres. */
-const RISE_HEIGHT = 0.34;
+const RISE_HEIGHT = 0.3;
 
 /**
  * How hard the two lights in the hood burn, at no dread and at full.
@@ -73,7 +106,7 @@ const EYE_GLOW = { calm: 3, dread: 11 } as const;
 const LEAN_ANGLE = 0.3;
 
 /** The column's height as built, which `RISEN` stretches. */
-const ROBE_HEIGHT = 1.5;
+const ROBE_HEIGHT = SIZE.robeHeight;
 
 export class Dealer {
   readonly group = new Group();
@@ -218,7 +251,7 @@ export class Dealer {
   #buildRobe(): Mesh {
     // A column, not a person: no legs, nothing that suggests how he stands.
     const body = new Mesh(
-      new CylinderGeometry(0.3, 0.62, ROBE_HEIGHT, 36, 1, true),
+      new CylinderGeometry(SIZE.robeTop, SIZE.robeHem, ROBE_HEIGHT, 36, 1, true),
       MATERIALS.robe,
     );
     body.position.y = ROBE_HEIGHT / 2;
@@ -228,9 +261,9 @@ export class Dealer {
   }
 
   #buildShoulders(): Mesh {
-    const shoulders = new Mesh(new SphereGeometry(0.32, 20, 12), MATERIALS.robe);
+    const shoulders = new Mesh(new SphereGeometry(SIZE.shoulderRadius, 20, 12), MATERIALS.robe);
     shoulders.scale.set(1, 0.42, 0.8);
-    shoulders.position.y = 1.5;
+    shoulders.position.y = SIZE.robeHeight;
     shoulders.castShadow = true;
     return shoulders;
   }
@@ -241,26 +274,32 @@ export class Dealer {
     this.#head.position.set(0, NECK_PIVOT.y, NECK_PIVOT.z);
 
     // The hood is a cone with the point up, so the face is a shadowed hollow
-    // rather than a shape you can resolve.
-    const hood = new Mesh(new CylinderGeometry(0.06, 0.23, 0.36, 32, 1, true), MATERIALS.robe);
-    hood.position.y = 0.1 - NECK_PIVOT.y + 1.62;
+    // rather than a shape you can resolve. Everything below is an offset from
+    // the neck, which is where this group's origin is — the numbers used to be
+    // written as absolute heights with the pivot subtracted back out, which
+    // worked and made moving him a puzzle.
+    const hood = new Mesh(
+      new CylinderGeometry(SIZE.hoodPeak, SIZE.hoodRadius, SIZE.hoodHeight, 32, 1, true),
+      MATERIALS.robe,
+    );
+    hood.position.y = 0.09;
     hood.castShadow = true;
 
-    const crown = new Mesh(new SphereGeometry(0.07, 14, 10), MATERIALS.robe);
-    crown.position.y = 0.28 - NECK_PIVOT.y + 1.62;
+    const crown = new Mesh(new SphereGeometry(0.055, 14, 10), MATERIALS.robe);
+    crown.position.y = 0.24;
 
     // Whatever the hood contains does not take light.
-    const hollow = new Mesh(new SphereGeometry(0.17, 18, 14), MATERIALS.hoodVoid);
+    const hollow = new Mesh(new SphereGeometry(SIZE.hollowRadius, 18, 14), MATERIALS.hoodVoid);
     hollow.scale.set(1, 1, 0.75);
-    hollow.position.set(0, 0.06 - NECK_PIVOT.y + 1.62, 0.04);
+    hollow.position.set(0, 0.05, 0.03);
 
     this.#head.add(hood, crown, hollow);
 
     for (const side of [-1, 1]) {
       // Their own material each, so their glow can be turned up without
       // lighting every other emissive thing in the room with it.
-      const eye = new Mesh(new SphereGeometry(0.014, 10, 8), MATERIALS.eye.clone());
-      eye.position.set(side * 0.048, 0.07 - NECK_PIVOT.y + 1.62, 0.15);
+      const eye = new Mesh(new SphereGeometry(0.011, 10, 8), MATERIALS.eye.clone());
+      eye.position.set(side * 0.036, 0.05, 0.112);
       this.#head.add(eye);
       this.eyes.push(eye);
     }
@@ -268,9 +307,9 @@ export class Dealer {
 
   /** Long arms, longer fingers. The proportions are the tell. */
   #buildArm(side: -1 | 1): Group {
-    const shoulderAt = new Vector3(side * 0.24, 1.44, 0.0);
-    const elbowAt = new Vector3(side * 0.3, 1.08, 0.18);
-    const wristAt = new Vector3(side * 0.2, TABLE.surfaceHeight + 0.02, 0.36);
+    const shoulderAt = new Vector3(side * 0.2, SIZE.robeHeight - 0.06, 0.0);
+    const elbowAt = new Vector3(side * 0.25, 1.03, 0.17);
+    const wristAt = new Vector3(side * 0.17, TABLE.surfaceHeight + 0.02, 0.34);
 
     const upper = jointTowards(shoulderAt, elbowAt);
     upper.joint.add(segment(upper.length, 0.1, 0.1, MATERIALS.robe));

@@ -175,7 +175,7 @@ export function chipGain(amount: number, bigBlind: number): number {
 export function dealerRiseCue(): Cue {
   return {
     kind: 'DEALER_RISE',
-    at: stationPoint(DEALER_STATION, RADIUS.body, 1.6),
+    at: stationPoint(DEALER_STATION, RADIUS.body, 1.5),
     gain: 0.7,
   };
 }

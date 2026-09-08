@@ -27,7 +27,7 @@ import {
  * The Dealer's face, such as it is: the hollow of the hood, which sits far above
  * where a seated player's head would be.
  */
-const DEALER_FACE_HEIGHT = 1.68;
+const DEALER_FACE_HEIGHT = 1.57;
 
 /** Half-angle within which a look counts as landing on something, in radians. */
 const HIT_CONE = 0.28; // ~16 degrees

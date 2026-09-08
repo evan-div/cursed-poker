@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { Box3, Quaternion, Vector3 } from 'three';
 import { DEALER, type DealerPresence } from '@cursed/shared';
+import { Avatar } from './avatar.js';
 import { Dealer } from './dealer.js';
-import { RADIUS, seatPoint } from './layout.js';
+import { RADIUS, TABLE, seatPoint } from './layout.js';
 
 /**
  * How the Dealer is drawn.
@@ -39,6 +40,62 @@ function headAt(dealer: Dealer): Vector3 {
   dealer.group.updateMatrixWorld(true);
   return dealer.head.getWorldPosition(new Vector3());
 }
+
+describe('how big he is', () => {
+  const measure = (dealer: Dealer) => {
+    settle(dealer, 10);
+    const box = new Box3().setFromObject(dealer.group);
+    const size = new Vector3();
+    box.getSize(size);
+    return { box, size };
+  };
+
+  it('is a figure rather than a cone', () => {
+    const { box, size } = measure(new Dealer());
+
+    const seated = new Avatar(2);
+    for (let i = 0; i < 200; i++) seated.update(1 / 60);
+    seated.group.updateMatrixWorld(true);
+    const player = new Vector3();
+    new Box3().setFromObject(seated.group).getSize(player);
+
+    // He was two metres tall and one and a quarter wide at the hem, on a table
+    // whose whole playing surface is one thirty-two across — so his skirt was
+    // nearly as wide as the felt, and standing where he stands it reached a
+    // fifth of a metre *inside* it. He was not looming over the table, he was
+    // standing through it, and what that reads as is a gigantic cone.
+    //
+    // The height was never really the problem. What made him a cone was the
+    // ratio of his base to his head, so the bound that matters is a width one:
+    // he has to be about as broad as the people he is dealing to. At the old
+    // hem he was nearly twice a player.
+    expect(box.max.y).toBeLessThan(1.9);
+    expect(size.x).toBeLessThan(player.x * 1.25);
+  });
+
+  it('leaves the table to the players', () => {
+    // His hem may rest against the rail. It may not reach the felt: the moment
+    // it does he stops being somebody standing at the table.
+    const hemRadius = new Box3().setFromObject(new Dealer().group).max.x;
+    const standsAt = RADIUS.body + 0.05;
+    expect(standsAt - hemRadius).toBeGreaterThan(TABLE.feltRadius);
+  });
+
+  it('still stands half a metre over everybody sitting down', () => {
+    const seated = new Avatar(2);
+    for (let i = 0; i < 200; i++) seated.update(1 / 60);
+    seated.group.updateMatrixWorld(true);
+    const player = new Box3().setFromObject(seated.group).max.y;
+
+    expect(measure(new Dealer()).box.max.y).toBeGreaterThan(player + 0.4);
+  });
+
+  it('goes well over two metres when he stands', () => {
+    const risen = new Dealer();
+    risen.apply(presence({ posture: 'RISEN' }), 1, T0);
+    expect(measure(risen).box.max.y).toBeGreaterThan(2.05);
+  });
+});
 
 describe('where he looks', () => {
   it('turns his head toward the seat he was told to watch', () => {
