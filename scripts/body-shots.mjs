@@ -49,7 +49,14 @@ const seatAt = (seat, radius, y) => {
   return [Math.sin(angle) * radius, y, -Math.cos(angle) * radius];
 };
 
+// The Dealer stands at station 0, a metre and a bit back from the middle, with
+// whatever is under the hood about one-seven off the floor.
+const DEALER_FACE = [0, 1.68, -1.07];
+
 const shots = {
+  // Him, from across his own table.
+  'dealer': [[0, 1.5, 1.5], DEALER_FACE],
+  'dealer-close': [[0.5, 1.6, 0.1], DEALER_FACE],
   // Across the table from seat 1, at the height of their face.
   'face-on': [seatAt(1, -1.55, 1.2), seatAt(1, 1.02, 1.16)],
   // Two seats along, which is the angle most opponents are actually seen from.

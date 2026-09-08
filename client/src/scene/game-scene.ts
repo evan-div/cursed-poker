@@ -9,7 +9,7 @@ import {
   WebGLRenderer,
 } from 'three';
 import type { ClientView, GazeTarget, MatchEvent, PresenceFrame } from '@cursed/shared';
-import { buildRoom } from './table.js';
+import { buildRoom, type Room } from './table.js';
 import { SeatedCamera } from './seated-camera.js';
 import { Avatar } from './avatar.js';
 import { Dealer, buildTrophyTray } from './dealer.js';
@@ -78,6 +78,7 @@ export class GameScene {
   #handNumber: number | null = null;
   #lastPresence: PresenceFrame | null = null;
   #dealer = new Dealer();
+  #room!: Room;
   #cards = new CardRenderer();
   #chips = new ChipRenderer();
 
@@ -88,6 +89,9 @@ export class GameScene {
       onExposure: (exposure, lift) => {
         hooks.onExposure(exposure, lift);
         this.#cards.setLocalPeek(this.#seatIndex ?? null, exposure, lift);
+        // Peering at a card you are holding up brings a little light with it —
+        // your own, not the room's, and it reaches about as far as your hands.
+        this.#room.setPeering(Math.max(exposure, lift));
         // Their own hands, without waiting for the round trip: a player watching
         // their own arm lag their own mouse is the one case latency is unfair.
         const seat = this.#seatIndex;
@@ -112,10 +116,13 @@ export class GameScene {
     this.renderer.shadowMap.type = PCFSoftShadowMap;
 
     this.scene.background = new Color(0x070605);
-    buildRoom(this.scene);
+    this.#room = buildRoom(this.scene);
     this.scene.add(this.#dealer.group, buildTrophyTray(), this.#cards.group, this.#chips.group);
 
     this.seated = new SeatedCamera(this.#aspect());
+    // The reading light rides the camera, because it is the player's own eyes
+    // rather than anything in the room. See `READING_LIGHT` in `table.ts`.
+    this.#room.attachTo(this.seated.camera);
     this.seated.sitAt(null);
     this.seated.onGazeChanged = hooks.onGaze;
     // Lifting a card and turning your head are the same physical movement, so
@@ -228,6 +235,12 @@ export class GameScene {
   applyPresence(frame: PresenceFrame): void {
     this.#lastPresence = frame;
     this.#cards.applyPresence(frame);
+    // The Dealer is a body on this channel too, and nothing about him is
+    // decided here — see `dealer.ts`. The room's dread rides along with him
+    // because lighting that differed between two players would make them
+    // disagree about what they had just watched.
+    this.#dealer.apply(frame.dealer, frame.dread, frame.serverTime);
+    this.#room.setDread(frame.dread);
     for (const seat of frame.seats) {
       const avatar = this.#avatars.get(seat.seatIndex);
       if (!avatar) continue;
@@ -348,6 +361,8 @@ export class GameScene {
 
     this.peek.update(delta);
     this.#cards.updatePoses();
+    this.#dealer.update(delta);
+    this.#room.update(delta);
     for (const avatar of this.#avatars.values()) avatar.update(delta);
 
     if (this.#free) {

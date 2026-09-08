@@ -156,8 +156,13 @@ function clamp(value: number, min: number, max: number): number {
  * this is the point their head should be pointing at. `OWN_CARDS` and
  * `OWN_CHIPS` resolve against the seat doing the looking, which is what makes
  * "they looked down at their hand" render correctly on their avatar.
+ *
+ * A null `ofSeat` is for lookers who have no seat — the Dealer. He only ever
+ * looks at a player or at nothing, so the seat-relative targets have no meaning
+ * for him, and passing null makes that a fact the type enforces rather than an
+ * arbitrary seat index he happens to be given.
  */
-export function gazePoint(target: GazeTarget, ofSeat: number): Vec3 | null {
+export function gazePoint(target: GazeTarget, ofSeat: number | null): Vec3 | null {
   switch (target.kind) {
     case 'DEALER':
       return stationPoint(DEALER_STATION, RADIUS.body, DEALER_FACE_HEIGHT);
@@ -168,9 +173,9 @@ export function gazePoint(target: GazeTarget, ofSeat: number): Vec3 | null {
     case 'POT':
       return POT_POSITION;
     case 'OWN_CARDS':
-      return seatPoint(ofSeat, RADIUS.holeCards, TABLE.surfaceHeight);
+      return ofSeat === null ? null : seatPoint(ofSeat, RADIUS.holeCards, TABLE.surfaceHeight);
     case 'OWN_CHIPS':
-      return seatPoint(ofSeat, RADIUS.chips, TABLE.surfaceHeight);
+      return ofSeat === null ? null : seatPoint(ofSeat, RADIUS.chips, TABLE.surfaceHeight);
     case 'AWAY':
       return null;
   }
