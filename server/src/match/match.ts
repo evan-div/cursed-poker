@@ -101,6 +101,18 @@ export interface MatchOptions {
   timings?: Partial<MatchTimings>;
 }
 
+/**
+ * The events that are him physically doing something.
+ *
+ * Cards leaving his hands, a board turned over, the pot pushed to somebody. Not
+ * a player betting — that is a player's hands, and he watches it.
+ */
+const MOVED_BY_HIS_HANDS = new Set<MatchEvent['type']>([
+  'HOLE_CARDS_DEALT',
+  'STREET_DEALT',
+  'POT_AWARDED',
+]);
+
 export type MatchListener = (events: MatchEvent[]) => void;
 
 export class Match {
@@ -191,7 +203,8 @@ export class Match {
     const seated = (table?.seats ?? []).filter((seat) => seat.seated).map((s) => s.seatIndex);
 
     return {
-      working: this.state.phase === 'HAND_IN_PROGRESS' && hand === null,
+      dealtAt: this.state.dealer.dealtAt,
+      now,
       handInProgress: this.state.phase === 'HAND_IN_PROGRESS',
       actingSeat: hand?.actingSeat ?? null,
       seats: seated,
@@ -627,6 +640,14 @@ export class Match {
 
   #emit(event: MatchEvent): void {
     this.#pendingEvents.push(event);
+
+    // The one place that notices cards and chips physically moving, so his
+    // hands can be doing it. Every route into a deal already comes through
+    // here, which is why it is the right hook: the alternative was asking the
+    // match whether it was mid-deal, and the match is never mid-anything.
+    if (MOVED_BY_HIS_HANDS.has(event.type)) {
+      this.state.dealer.dealtAt = this.#clock.now();
+    }
   }
 
   /** Hands the batch of events since the last flush to every subscriber. */

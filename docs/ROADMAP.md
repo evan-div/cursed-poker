@@ -196,11 +196,25 @@ Two walls tested through whole running matches, both verified to fail when
 deliberately broken: the cards cannot reach the Dealer, and the Dealer cannot
 reach the cards (his chance and the shuffle's chance are different objects).
 
+- [x] Dread curve tuned against played-out matches rather than against reasoning
+      about one — `dread-profile.test.ts` plays whole evenings and counts what
+      the Dealer actually did
+
+Profiling a real evening found three thresholds that were correct, commented,
+and **never once reached**: `DEALING` asked the match whether it was mid-deal
+(a match is never mid-anything), and both `LEANING` and `RISEN` sat above the
+highest dread a live match can hold. A six-hander ends the moment the fifth
+player busts, so while anyone is still playing at most four chairs are empty —
+the ceiling is 0.77, and `riseAbove` was 0.78. Fixing that for six-handed play
+left four-handed (ceiling 0.717) exactly as broken, so there is now a test that
+checks every threshold against every seat count.
+
+Six-handed, forty-six minutes, a hundred and twenty-six hands: STILL 6%,
+DEALING 15%, WATCHING 39%, LEANING 20%, RISEN 21%, ending at 0.85 dread.
+
 Still open in this phase:
 
 - [ ] Frame times on real hardware; the automated runs use software rendering
-- [ ] Tune the dread curve against a played-out match rather than against
-      reasoning about one
 
 ---
 

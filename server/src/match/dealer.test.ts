@@ -21,7 +21,8 @@ const T0 = 1_700_000_000_000;
 
 function context(over: Partial<DealerContext> = {}): DealerContext {
   return {
-    working: false,
+    dealtAt: null,
+    now: T0,
     handInProgress: true,
     actingSeat: null,
     seats: [0, 1, 2, 3],
@@ -78,9 +79,15 @@ describe('what he is allowed to know', () => {
 });
 
 describe('what his body does', () => {
-  it('deals while cards are moving', () => {
-    const { state } = run(context({ working: true }), 5, 20);
-    expect(state.posture).toBe('DEALING');
+  it('deals for a moment after cards move, and then stops', () => {
+    // Dealing is an event and a posture is a state, so it is held for a window.
+    // The first version asked the match whether it was mid-deal; the match is
+    // never mid-anything, and he went a whole match without dealing once.
+    const during = run(context({ dealtAt: T0, now: T0 + 200 }), 5, 20, 0);
+    expect(during.state.posture).toBe('DEALING');
+
+    const after = run(context({ dealtAt: T0, now: T0 + DEALER.dealingMs + 1 }), 5, 20, 0);
+    expect(after.state.posture).not.toBe('DEALING');
   });
 
   it('sits still between hands, until it gets bad enough to stand', () => {
@@ -193,6 +200,32 @@ describe('the room', () => {
     grows('elapsedMs', [0, 10_000, 600_000, DREAD.fullTimeMs, DREAD.fullTimeMs * 3]);
     grows('eliminated', [0, 1, 2, 3, 4, 5]);
     grows('sacrifices', [0, 1, 3, 6, 12]);
+  });
+
+  it('keeps every threshold under what a live match can actually reach', () => {
+    // The bug this exists for: `riseAbove` was set at 0.78, and the highest
+    // dread a running six-hander can hold is 0.77. Not "rarely" — *never*. A
+    // constant a hair above the ceiling is not something any assertion about
+    // behaviour catches, because the behaviour is correct and simply does not
+    // occur. It took playing a whole match and counting postures to find.
+    //
+    // The ceiling: a match ends the moment one player is left, so while anybody
+    // is still playing at most `startingPlayers - 2` chairs are empty. Time and
+    // sacrifices can max out; that last chair cannot.
+    const ceiling = (startingPlayers: number) =>
+      dreadLevel({
+        startingPlayers,
+        eliminated: startingPlayers - 2,
+        elapsedMs: DREAD.fullTimeMs * 10,
+        // Phase 9 has not shipped, so nothing may depend on it having.
+        sacrifices: 0,
+      });
+
+    for (const players of [4, 5, 6]) {
+      const live = ceiling(players);
+      expect(DEALER.riseAbove, `${players}-handed cannot reach riseAbove`).toBeLessThan(live);
+      expect(DEALER.leanAbove, `${players}-handed cannot reach leanAbove`).toBeLessThan(live);
+    }
   });
 
   it('measures empty chairs against how many sat down', () => {

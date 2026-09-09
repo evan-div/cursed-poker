@@ -85,6 +85,15 @@ export const DEALER = {
   /** How long a twitch takes to play out, in milliseconds. */
   twitchMs: 180,
   /**
+   * How long he goes on working after the last card lands, in milliseconds.
+   *
+   * Dealing is an event, and a posture is a state, so one has to be turned into
+   * the other by holding it for a while. Long enough to read as him doing
+   * something; short enough that he is back to watching you before the betting
+   * gets interesting.
+   */
+  dealingMs: 1_400,
+  /**
    * How long he holds a gaze, in milliseconds, at no dread and at full.
    *
    * It gets *longer*, which is the whole point. A head that flicks about is
@@ -106,10 +115,35 @@ export const DEALER = {
   stayChance: 0.4,
   /** Chance he looks at a player who is lifting their cards right now. */
   noticePeekChance: 0.55,
-  /** Dread above which he will stand between hands. */
-  riseAbove: 0.82,
-  /** Dread above which he leans in on whoever is acting. */
-  leanAbove: 0.45,
+  /**
+   * Dread above which he will stand.
+   *
+   * Late on purpose — standing is the last thing he does, and a Dealer who
+   * stands in hand twelve of forty has spent the only card he had — but not
+   * *unreachably* late, which is what the first number was. A six-hander is
+   * over the moment the fifth player busts, so while anybody is still playing
+   * at most four chairs are empty: the highest dread a live match can hold is
+   * 0.45 from the clock plus 0.32 from the chairs, and it was set at 0.78. He
+   * could not have stood if the evening had gone on all night.
+   *
+   * That ceiling is lower again at a smaller table — four-handed it is 0.717 —
+   * and the first correction landed at 0.72, which fixed six-handed play and
+   * left four-handed exactly as broken. So the number now clears the *tightest*
+   * table, and `dealer.test.ts` checks every threshold against every seat count
+   * rather than against the one that happened to be profiled.
+   */
+  riseAbove: 0.68,
+  /**
+   * Dread above which he leans in on whoever is acting.
+   *
+   * Twice retuned against a played-out match, in both directions. It started
+   * above where an evening ever reached, so he never leaned at all; dropped to
+   * a third it became his default posture for three quarters of the night,
+   * which is worse — an escalation nobody can remember the table without is not
+   * an escalation. Here it arrives around the halfway mark of a full six-hander
+   * and owns the back half.
+   */
+  leanAbove: 0.55,
 } as const;
 
 /**
@@ -139,8 +173,17 @@ export interface DreadInput {
  * quiet match still darkens, because it is long.
  */
 export const DREAD = {
-  /** Match length that alone accounts for `timeWeight`, in milliseconds. */
-  fullTimeMs: 90 * 60 * 1000,
+  /**
+   * Match length that alone accounts for `timeWeight`, in milliseconds.
+   *
+   * Three quarters of an hour, not an hour and a half. The first number was
+   * the *upper* end of the target match length, which meant the clock's whole
+   * contribution only arrived for a match that was already over — profiling a
+   * played-out six-hander found it finishing at less than half dread, with the
+   * room barely darker than it started. Set below the median instead, so time
+   * has done its work by the middle and the empty chairs carry the end.
+   */
+  fullTimeMs: 45 * 60 * 1000,
   timeWeight: 0.45,
   /** Reached when everyone but one player is gone. */
   emptyChairWeight: 0.4,

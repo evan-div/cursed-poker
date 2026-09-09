@@ -40,6 +40,15 @@ import type { RandomSource } from '../poker/index.js';
 export interface DealerState {
   gaze: GazeTarget;
   posture: DealerPosture;
+  /** Epoch ms when cards or chips last moved through his hands, or null. */
+  dealtAt: number | null;
+  /**
+   * Epoch ms when he first stood, or null.
+   *
+   * Set once and never cleared, because he does not sit back down. See
+   * `choosePosture`.
+   */
+  roseAt: number | null;
   /** Epoch ms when he last changed anything at all. */
   lastMovedAt: number;
   /** Epoch ms when he will next consider doing something. */
@@ -55,8 +64,10 @@ export interface DealerState {
  * it is a decision about the game rather than a refactor.
  */
 export interface DealerContext {
-  /** True while cards or chips are actually moving. */
-  working: boolean;
+  /** Epoch ms when cards or chips last moved through his hands, or null. */
+  dealtAt: number | null;
+  /** Now, so a window can be measured against `dealtAt`. */
+  now: number;
   /** Whether a hand is live at all. */
   handInProgress: boolean;
   /** Whose turn it is, or null. */
@@ -73,6 +84,8 @@ export function createDealer(now: number): DealerState {
   return {
     gaze: GAZE_AWAY,
     posture: 'STILL',
+    dealtAt: null,
+    roseAt: null,
     lastMovedAt: now,
     nextDecisionAt: now,
     twitchAt: null,
@@ -95,6 +108,7 @@ export function updateDealer(
 ): void {
   const posture = choosePosture(state, context);
   if (posture !== state.posture) {
+    if (posture === 'RISEN') state.roseAt = now;
     state.posture = posture;
     state.lastMovedAt = now;
   }
@@ -130,13 +144,29 @@ export function updateDealer(
  * memory, because only the gaze is a *choice*.
  */
 function choosePosture(state: DealerState, context: DealerContext): DealerPosture {
-  if (context.working) return 'DEALING';
+  // He stands between hands, and then he never sits down again.
+  //
+  // Without the second half this posture was effectively unreachable: the gap
+  // between hands is a second and a half, and only the last few of a match are
+  // dark enough to qualify, so a whole evening's profile showed him standing
+  // for under one per cent of it — rounded, never. Standing *and staying
+  // stood* is both visible and much worse: the table plays the rest of the
+  // night with him on his feet at the head of it.
+  if (state.roseAt !== null) return 'RISEN';
+  if (!context.handInProgress && context.dread >= DEALER.riseAbove) return 'RISEN';
 
-  if (!context.handInProgress) {
-    // Between hands is the only time he is not busy, and the only time he
-    // stands. It is also when everyone is looking at him.
-    return context.dread >= DEALER.riseAbove ? 'RISEN' : 'STILL';
+  // Dealing is an *event*, not a state: cards leave his hands and a second
+  // later they have landed. The first version asked the match whether it was
+  // mid-deal, and the match is never mid-anything — by the time a hand exists
+  // the cards are already dealt — so he never once dealt in a whole match.
+  // A window after the last thing that moved is what a body doing it looks
+  // like.
+  if (context.dealtAt !== null && context.now - context.dealtAt < DEALER.dealingMs) {
+    return 'DEALING';
   }
+
+  // Between hands and not dark enough to stand: he simply waits.
+  if (!context.handInProgress) return 'STILL';
 
   const watchingSomebody = state.gaze.kind === 'SEAT';
   if (!watchingSomebody) return 'STILL';
