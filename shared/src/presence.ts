@@ -28,6 +28,7 @@
  * one byte instead of twelve.
  */
 import type { DealerPresence } from './dealer.js';
+import type { SeatTells } from './stress.js';
 
 /**
  * What somebody appears to be looking at.
@@ -253,6 +254,20 @@ export interface SeatPresence {
   stillMs: number;
   /** False while the player is away; an empty chair does not fidget. */
   present: boolean;
+  /**
+   * What this seat is giving away: shaking, breathing, sweat.
+   *
+   * Derived on the server from stress the client never sees, so a patched build
+   * cannot sit there looking serene through the worst hand of its life — it
+   * never had the number to lie about. Quantised on the way out, because a
+   * tremor at full precision could be differenced frame to frame into a far
+   * better read than any eye could make.
+   *
+   * And note what is still absent from this whole frame: no heart rate, no
+   * stress scalar, no hand strength, no card. `stress.ts` explains at length
+   * why none of these may ever depend on what somebody holds.
+   */
+  tells: SeatTells;
 }
 
 export interface PresenceFrame {

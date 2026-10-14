@@ -10,11 +10,12 @@ import {
   type SeatView,
   type SelfView,
 } from '@cursed/shared';
-import { dreadLevel } from '@cursed/shared';
+import { COMPOSED, dreadLevel } from '@cursed/shared';
 import { legalActions } from '../poker/index.js';
 import { projectDealer } from './dealer.js';
 import { elapsedMs, findPlayer, type MatchState, type PlayerRecord } from './match-state.js';
 import { hasPeeked, projectPresence } from './presence.js';
+import { projectSelfStress, projectTells } from './stress.js';
 
 /**
  * The hidden-information boundary.
@@ -60,7 +61,7 @@ export function projectForViewer(match: MatchState, viewerId: string | null, now
     level: projectLevel(match, now),
     players: match.players.map(projectPlayer(match.hostPlayerId)),
     hand: projectHand(match),
-    you: projectSelf(match, viewer),
+    you: projectSelf(match, viewer, now),
     lastResult: match.lastResult,
     winnerPlayerId: match.winnerPlayerId,
   };
@@ -85,7 +86,17 @@ export function presenceFrame(match: MatchState, now: number): PresenceFrame {
   );
 
   return {
-    ...projectPresence(match.presence, { seatIndices, connected }, now),
+    ...projectPresence(
+      match.presence,
+      {
+        seatIndices,
+        connected,
+        // Supplied rather than computed in `presence.ts`: that module lays out
+        // bodies and has no business knowing how frightened anybody is.
+        tellsFor: (seatIndex) => projectTells(match.stress, seatIndex, now),
+      },
+      now,
+    ),
     dealer: projectDealer(match.dealer, now),
     dread: roomDread(match, now),
   };
@@ -193,9 +204,16 @@ function projectHand(match: MatchState): HandView | null {
   };
 }
 
-function projectSelf(match: MatchState, viewer: PlayerRecord | undefined): SelfView {
+function projectSelf(match: MatchState, viewer: PlayerRecord | undefined, now: number): SelfView {
   if (!viewer) {
-    return { playerId: '', seatIndex: null, holeCards: null, hasPeeked: false, legalActions: null };
+    return {
+      playerId: '',
+      seatIndex: null,
+      holeCards: null,
+      hasPeeked: false,
+      legalActions: null,
+      stress: COMPOSED,
+    };
   }
 
   const hand = match.table?.hand;
@@ -217,5 +235,9 @@ function projectSelf(match: MatchState, viewer: PlayerRecord | undefined): SelfV
     holeCards,
     hasPeeked: looked,
     legalActions: isTheirTurn && hand ? legalActions(hand, viewer.seatIndex) : null,
+    // Your own heart, and nobody else's. The table gets `tells` on the presence
+    // frame instead — shaking and breathing, quantised, which is what somebody
+    // across a dark table actually has to work with.
+    stress: projectSelfStress(match.stress, viewer.seatIndex, now),
   };
 }

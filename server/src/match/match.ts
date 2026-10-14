@@ -29,6 +29,14 @@ import {
 import { SystemClock, type Clock, type TimerHandle } from './clock.js';
 import { createDealer, updateDealer, type DealerContext } from './dealer.js';
 import {
+  applyStressEvent,
+  createStress,
+  forgetStress,
+  settleStress,
+  type StandingPressure,
+} from './stress.js';
+import type { StressEvent } from '@cursed/shared';
+import {
   elapsedMs,
   findPlayer,
   findPlayerBySeat,
@@ -152,6 +160,7 @@ export class Match {
       structure: options.structure ?? DEFAULT_BLIND_STRUCTURE,
       table: null,
       presence: createPresence(),
+      stress: createStress(),
       dealer: createDealer(this.#clock.now()),
       startingPlayers: 0,
       sacrifices: 0,
@@ -187,6 +196,36 @@ export class Match {
     if (this.#disposed) return;
     const now = this.#clock.now();
     updateDealer(this.state.dealer, this.#dealerContext(now), this.#dealerRng, now);
+    settleStress(this.state.stress, this.#standingPressure(now), now);
+  }
+
+  /**
+   * What is weighing on each seat that has not stopped weighing on them.
+   *
+   * Stacks, blinds, the room, and whether the thing at the head of the table is
+   * looking at them. Every one of these is on the felt in front of everybody —
+   * see the rule at the top of `shared/src/stress.ts`, which this method is the
+   * main opportunity to break.
+   */
+  #standingPressure(now: number): StandingPressure[] {
+    const table = this.state.table;
+    if (!table) return [];
+
+    const bigBlind = levelAt(this.state.structure, table.levelIndex).bigBlind;
+    const dread = roomDread(this.state, now);
+    const watching = this.state.dealer.gaze;
+    const watchedSeat = watching.kind === 'SEAT' ? watching.seatIndex : null;
+    const hand = table.hand;
+
+    return table.seats
+      .filter((seat) => seat.seated)
+      .map((seat) => ({
+        seatIndex: seat.seatIndex,
+        stackBlinds: bigBlind > 0 ? seat.stack / bigBlind : Number.POSITIVE_INFINITY,
+        dread,
+        watched: seat.seatIndex === watchedSeat,
+        inHand: (hand?.seats ?? []).some((s) => s.seatIndex === seat.seatIndex && !s.folded),
+      }));
   }
 
   /**
@@ -276,6 +315,7 @@ export class Match {
     const index = this.state.players.findIndex((p) => p.playerId === playerId);
     if (index < 0) return;
     forgetSeat(this.state.presence, this.state.players[index]!.seatIndex);
+    forgetStress(this.state.stress, this.state.players[index]!.seatIndex);
     this.state.players.splice(index, 1);
 
     if (this.state.hostPlayerId === playerId && this.state.players[0]) {
@@ -647,6 +687,88 @@ export class Match {
     // match whether it was mid-deal, and the match is never mid-anything.
     if (MOVED_BY_HIS_HANDS.has(event.type)) {
       this.state.dealer.dealtAt = this.#clock.now();
+    }
+    this.#raiseStress(event);
+  }
+
+  /**
+   * Turns what just happened into what it does to people.
+   *
+   * One place, reading the event payloads and the public table, so there is one
+   * place to check against the rule: **nothing here may consult a card.** Every
+   * line below works from chips, stacks and seat numbers — all of which are on
+   * everybody's screen already. `stress-boundary.test.ts` proves it by running
+   * two tables over different decks and requiring identical heart rates.
+   */
+  #raiseStress(event: MatchEvent): void {
+    const now = this.#clock.now();
+    const table = this.state.table;
+    const spike = (seatIndex: number, name: StressEvent, intensity = 1) =>
+      applyStressEvent(this.state.stress, seatIndex, name, now, intensity);
+    const everyone = (name: StressEvent, intensity = 1) => {
+      for (const seat of table?.seats ?? []) {
+        if (seat.seated) spike(seat.seatIndex, name, intensity);
+      }
+    };
+    const stackOf = (seatIndex: number) =>
+      table?.seats.find((seat) => seat.seatIndex === seatIndex)?.stack ?? 0;
+
+    switch (event.type) {
+      case 'HOLE_CARDS_DEALT':
+        for (const seatIndex of event.seats) spike(seatIndex, 'DEALT_IN');
+        return;
+
+      case 'ACTION_REQUIRED': {
+        const owed = event.legal.callAmount;
+        if (owed <= 0) return;
+        // How much of what they have left this would cost them. A shove at
+        // somebody is terrifying in proportion to their stack, not to the pot.
+        const stack = Math.max(stackOf(event.seatIndex), 1);
+        const share = Math.min(owed / stack, 1);
+        // Calling would be for everything they have.
+        if (share >= 0.95) spike(event.seatIndex, 'FACED_ALL_IN', 1);
+        else spike(event.seatIndex, 'FACED_BET', share);
+        return;
+      }
+
+      case 'PLAYER_ACTED': {
+        if (event.allIn) {
+          spike(event.seatIndex, 'SHOVED');
+          return;
+        }
+        const action = event.action;
+        const amount = 'amount' in action ? action.amount : 0;
+        if (amount <= 0) return;
+        const after = Math.max(event.stack, 1);
+        spike(event.seatIndex, 'COMMITTED', Math.min(amount / (amount + after), 1));
+        return;
+      }
+
+      case 'BLIND_LEVEL_UP':
+        everyone('BLINDS_UP');
+        return;
+
+      case 'PLAYER_ELIMINATED':
+        // Everybody still sitting watches a chair go empty.
+        everyone('SEAT_EMPTIED');
+        return;
+
+      case 'HAND_COMPLETE': {
+        // Who gained and who lost, from the result's own net change — chips,
+        // never cards. A player who folded early is in here at zero and so
+        // spikes at neither.
+        for (const [seat, net] of Object.entries(event.result.netChange)) {
+          const seatIndex = Number(seat);
+          if (net === 0) continue;
+          const stack = Math.max(stackOf(seatIndex), 1);
+          const size = Math.min(Math.abs(net) / stack, 1);
+          spike(seatIndex, net > 0 ? 'WON_POT' : 'LOST_POT', size);
+        }
+        return;
+      }
+
+      default:
+        return;
     }
   }
 

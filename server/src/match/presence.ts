@@ -1,4 +1,5 @@
 import {
+  CALM,
   GAZE_AWAY,
   PRESENCE,
   gazeEquals,
@@ -7,6 +8,7 @@ import {
   type PresenceFrame,
   type PresenceInput,
   type SeatPresence,
+  type SeatTells,
 } from '@cursed/shared';
 
 /**
@@ -207,6 +209,12 @@ export function forgetSeat(presence: PresenceState, seatIndex: number): void {
 }
 
 export interface PresenceFrameOptions {
+  /**
+   * What each seat is giving away. Supplied rather than computed here, because
+   * stress belongs to `stress.ts` and this module has no business knowing how
+   * frightened anybody is — only how to lay a body out for broadcast.
+   */
+  tellsFor?: (seatIndex: number) => SeatTells;
   /** Seats currently at the table, in seat order. */
   seatIndices: readonly number[];
   /** Seats whose player is connected. Everyone else stops moving entirely. */
@@ -250,6 +258,7 @@ export function projectPresence(
         handlingChips: false,
         stillMs: 0,
         present,
+        tells: options.tellsFor?.(seatIndex) ?? CALM,
       };
     }
 
@@ -269,6 +278,9 @@ export function projectPresence(
       handlingChips: present && record.handlingChips && decay > 0,
       stillMs: Math.max(0, now - record.lastMovedAt),
       present,
+      // An empty chair does not sweat. A disconnected player's body is held and
+      // then decays, but their fear leaves with them.
+      tells: present ? (options.tellsFor?.(seatIndex) ?? CALM) : CALM,
     };
   });
 

@@ -2,6 +2,7 @@ import type { BlindStructure, HandResult, MatchPhase, MatchStatus } from '@curse
 import type { TableState } from '../poker/index.js';
 import type { DealerState } from './dealer.js';
 import type { PresenceState } from './presence.js';
+import type { StressState } from './stress.js';
 
 /**
  * Authoritative match state.
@@ -49,6 +50,14 @@ export interface MatchState {
    * has looked at their own cards — one bit, never what they saw.
    */
   presence: PresenceState;
+
+  /**
+   * How frightened everybody is.
+   *
+   * Beside the table like `presence`, and under the same prohibition in the
+   * opposite direction: nothing here may read a hand. See `stress.ts`.
+   */
+  stress: StressState;
 
   /**
    * The Dealer's body: where he is looking, what he is doing, when he last

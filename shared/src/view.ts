@@ -14,6 +14,7 @@
 import type { Card } from './cards.js';
 import type { HandResult } from './hand-events.js';
 import type { HandCategory, HandPhase, LegalActions } from './poker-types.js';
+import type { SelfStress } from './stress.js';
 
 export const MATCH_STATUSES = ['LOBBY', 'IN_PROGRESS', 'FINISHED'] as const;
 export type MatchStatus = (typeof MATCH_STATUSES)[number];
@@ -94,6 +95,16 @@ export interface SelfView {
   hasPeeked: boolean;
   /** Null unless it is this player's turn. */
   legalActions: LegalActions | null;
+  /**
+   * Your own heart, in beats per minute, and the scalar behind it.
+   *
+   * The only place in the protocol a real stress number appears, and it goes to
+   * exactly one person. You are told because you can feel it; nobody else is,
+   * because they cannot. What the rest of the table gets is `SeatTells` on the
+   * presence frame — shaking and breathing and sweat, quantised, which is what
+   * a person across a table actually has to work with.
+   */
+  stress: SelfStress;
 }
 
 export interface LevelView {

@@ -174,10 +174,13 @@ describe('looking at your own cards', () => {
     expect(record.peeksThisHand).toBe(2);
     expect(record.peekMsThisHand).toBe(1_000);
 
-    // And none of it is replicated. Phase 6 reads these; the table never does.
+    // And none of it is replicated. Phase 6 reads these counters to drive
+    // stress; the table never sees them. What the table gets is `tells` —
+    // shaking, breathing, sweat — which is a *consequence* of having looked
+    // four times, not a count of it.
     const seat = frame(presence, T0 + 1_600).seats[0]!;
     expect(Object.keys(seat).sort()).toEqual(
-      ['gaze', 'handlingChips', 'lean', 'lift', 'peek', 'present', 'seatIndex', 'stillMs'].sort(),
+      ['gaze', 'handlingChips', 'lean', 'lift', 'peek', 'present', 'seatIndex', 'stillMs', 'tells'].sort(),
     );
   });
 
@@ -225,6 +228,14 @@ describe('the presence frame as a boundary', () => {
       'handlingChips',
       'stillMs',
       'present',
+      // Phase 6's tells. Held to the same standard as everything above: a
+      // shake, a breath and a word for how wet somebody's face is. No heart
+      // rate, no stress scalar, and — the rule the whole phase turns on —
+      // nothing that could ever depend on what they are holding.
+      'tells',
+      'tremor',
+      'breathing',
+      'sweat',
     ]);
     const walk = (node: unknown): void => {
       if (Array.isArray(node)) return node.forEach(walk);

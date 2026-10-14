@@ -398,6 +398,13 @@ describe('bodies over the wire', () => {
       'posture',
       'twitchAt',
       'dread',
+      // Phase 6's tells: what a seat is giving away. A shake, a breath, and a
+      // word for how wet somebody's face is — never a heart rate, never a
+      // stress number, and never anything derived from a card.
+      'tells',
+      'tremor',
+      'breathing',
+      'sweat',
     ]);
     let leaves = 0;
     const walk = (node: unknown): void => {
