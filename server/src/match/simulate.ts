@@ -7,6 +7,7 @@ import {
 import { SeededRandomSource } from '../poker/index.js';
 import { ManualClock } from './clock.js';
 import { Match, type MatchTimings } from './match.js';
+import { GAZE_AWAY, type PresenceInput } from '@cursed/shared';
 import type { StressTuning } from './stress.js';
 import type { StressObserver } from './stress-telemetry.js';
 
@@ -18,6 +19,13 @@ import type { StressObserver } from './stress-telemetry.js';
  * deliberately unremarkable: mostly passive, sometimes not, and they take a few
  * seconds to think, because a match where everybody acts instantly happens in
  * a few seconds of clock time and says nothing about the real one.
+ *
+ * They also have bodies, roughly. Each looks at their cards once a hand, often
+ * looks again when somebody bets into them, and now and then sits on a
+ * decision until the clock is nearly out. None of it is decided by their cards
+ * — they never see them — which is exactly the property a real player's tells
+ * do *not* have, and why bot evenings are for the shape of things and real
+ * recordings are for tuning what a person does.
  */
 
 /** Randomised but plausible: mostly passive, sometimes not. */
@@ -42,6 +50,14 @@ export function chooseAction(legal: LegalActions, pot: number, rng: SeededRandom
   if (legal.canRaise || legal.canCall) return { type: 'ALL_IN' };
   return { type: 'FOLD' };
 }
+
+/** How bots behave, as rates. */
+export const BOTS = {
+  /** Chance of looking at the cards again when somebody has bet into them. */
+  recheckWhenFacingBet: 0.35,
+  /** Chance of sitting on a decision until the clock is nearly out. */
+  tank: 0.06,
+} as const;
 
 /** The presence tick, exactly as `game-server.ts` runs it. */
 export const SIM_STEP_MS = 83;
@@ -92,10 +108,24 @@ export function playEvening(options: EveningOptions): Evening {
   match.start('p0');
 
   const brain = new SeededRandomSource(seed * 31 + 5);
+  // A separate source for bodies, so giving the bots hands did not change a
+  // single poker decision they make.
+  const nerves = new SeededRandomSource(seed * 53 + 11);
   let thinking = 0;
+  let deciding: string | null = null;
+  let holding: string | null = null;
+  const looked = new Set<string>();
   let hands = 0;
   let lastHand = -1;
   let guard = 0;
+
+  const body = (peek: number): PresenceInput => ({
+    gaze: peek > 0 ? { kind: 'OWN_CARDS' } : GAZE_AWAY,
+    peek,
+    lift: 0,
+    lean: 0,
+    handlingChips: false,
+  });
 
   while (match.state.status !== 'FINISHED' && guard++ < 400_000) {
     match.tick();
@@ -105,6 +135,7 @@ export function playEvening(options: EveningOptions): Evening {
     if (hand && hand.handNumber !== lastHand) {
       lastHand = hand.handNumber;
       hands++;
+      looked.clear();
     }
 
     const seat = hand?.actingSeat;
@@ -114,6 +145,24 @@ export function playEvening(options: EveningOptions): Evening {
         : match.state.players.find((p) => p.seatIndex === seat)?.playerId;
 
     if (actor && hand) {
+      // A new decision: how long it will take, and whether the cards come up.
+      const decision = `${hand.handNumber}:${actor}:${hand.phase}:${hand.currentBet}`;
+      if (decision !== deciding) {
+        deciding = decision;
+        const owed = match.viewFor(actor).you.legalActions?.callAmount ?? 0;
+        const firstLook = !looked.has(actor);
+        if (firstLook || (owed > 0 && nerves.nextInt(1000) < BOTS.recheckWhenFacingBet * 1000)) {
+          looked.add(actor);
+          match.reportPresence(actor, body(0.9));
+          holding = actor;
+        }
+        if (nerves.nextInt(1000) < BOTS.tank * 1000) {
+          // Into the last few seconds, but never past the clock.
+          const clock = SIM_TIMINGS.actionTimeoutMs;
+          thinking = clock - 7_500 + nerves.nextInt(5_000);
+        }
+      }
+
       // People think. Without it the whole match happens inside a few seconds
       // of clock time, and nothing that decays over seconds is ever measured.
       if (thinking > 0) {
@@ -126,6 +175,10 @@ export function playEvening(options: EveningOptions): Evening {
       if (!legal) {
         clock.advance(SIM_STEP_MS);
         continue;
+      }
+      if (holding === actor) {
+        match.reportPresence(actor, body(0));
+        holding = null;
       }
       try {
         match.submitAction(actor, hand.handNumber, chooseAction(legal, view.hand?.potTotal ?? 0, brain));

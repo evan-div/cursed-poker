@@ -55,6 +55,7 @@ const FAST = {
 
 function seatFour(deckSeed: number) {
   const clock = new ManualClock();
+  const fired = new Set<string>();
   const match = new Match({
     roomCode: 'STRESS',
     hostPlayerId: 'p0',
@@ -66,13 +67,14 @@ function seatFour(deckSeed: number) {
     dealerRng: new SeededRandomSource(99),
     structure: TURBO_BLIND_STRUCTURE,
     timings: FAST,
+    telemetry: { event: (_, __, name) => void fired.add(name), settled: () => {}, forgot: () => {} },
   });
 
   const playerIds = ['p0', 'p1', 'p2', 'p3'];
   for (const id of playerIds) match.join(id, id);
   for (const id of playerIds) match.setReady(id, true);
   match.start('p0');
-  return { match, clock, playerIds };
+  return { match, clock, playerIds, fired };
 }
 
 function actingPlayerId(match: Match): string | null {
@@ -125,6 +127,14 @@ function playOut(table: ReturnType<typeof seatFour>, hands: number): Tick[] {
 
     const actor = actingPlayerId(match);
     if (actor && hand) {
+      // Everybody re-checks their cards before acting — lifts them, puts them
+      // down — so the one stress event driven by a player's own body runs
+      // through this test too. The same script on both tables: a re-check is
+      // something the table watches happen, never something read off a card.
+      const body = { gaze: { kind: 'OWN_CARDS' as const }, lift: 0, lean: 0, handlingChips: false };
+      match.reportPresence(actor, { ...body, peek: 0.9 });
+      match.reportPresence(actor, { ...body, peek: 0 });
+
       // A fixed script chosen without looking at a single card: check when you
       // can, otherwise call. Identical on both tables by construction.
       const legal = match.viewFor(actor).you.legalActions;
@@ -149,8 +159,14 @@ function agreeingPrefix(a: Tick[], b: Tick[]): number {
 
 describe('the cards cannot reach anybody’s heart rate', () => {
   it('is identical for as long as a hand is live and undecided', () => {
-    const a = playOut(seatFour(11), 8);
+    const left = seatFour(11);
+    const a = playOut(left, 8);
     const b = playOut(seatFour(98_765), 8);
+
+    // The script exercises the events that come from a player's own body and
+    // the Dealer's head, or their agreement below would prove nothing about them.
+    expect(left.fired).toContain('RE_CHECKED');
+    expect(left.fired).toContain('WATCHED');
 
     // The premise: these really are different hands, or the test proves nothing.
     expect(a.map((t) => t.cards)).not.toEqual(b.map((t) => t.cards));

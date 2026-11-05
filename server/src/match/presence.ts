@@ -3,6 +3,7 @@ import {
   GAZE_AWAY,
   PRESENCE,
   gazeEquals,
+  PEEK,
   quantisePeek,
   type GazeTarget,
   type PresenceFrame,
@@ -29,6 +30,21 @@ import {
 
 /** Smallest change in exposure anyone could actually notice. */
 const VISIBLE_MOVEMENT = 0.005;
+
+/**
+ * What counts as looking at your cards, as the table sees it.
+ *
+ * A look is the *replicated* curl rising past the point where a rank becomes
+ * readable — the same number everybody else receives, so a look is something
+ * the whole table could have watched happen, never something only the server
+ * knows. It only counts again once the cards have gone back down below
+ * `rearmBelow`: without that gap, a corner hovering around the line would be a
+ * dozen looks a second.
+ */
+export const LOOK = {
+  at: PEEK.rankVisibleAt,
+  rearmBelow: 0.15,
+} as const;
 
 export interface SeatPresenceRecord {
   seatIndex: number;
@@ -64,6 +80,14 @@ export interface SeatPresenceRecord {
    * different kind of pressure than one who glances once.
    */
   peekMsThisHand: number;
+  /**
+   * How many times this hand the table has seen them lift their cards far
+   * enough to read. See `LOOK`. The first one is everybody; the rest are what
+   * `RE_CHECKED` is made of.
+   */
+  looksThisHand: number;
+  /** True once the cards have gone back down far enough to count another look. */
+  lookArmed: boolean;
 }
 
 /**
@@ -95,6 +119,8 @@ function blank(seatIndex: number, now: number): SeatPresenceRecord {
     peekedHand: null,
     peeksThisHand: 0,
     peekMsThisHand: 0,
+    looksThisHand: 0,
+    lookArmed: true,
   };
 }
 
@@ -125,7 +151,7 @@ export function reportPresence(
   seatIndex: number,
   input: PresenceInput,
   now: number,
-): void {
+): { looked: boolean } {
   const record = seatPresence(presence, seatIndex, now);
   const peek = clamp01(input.peek);
   const lift = clamp01(input.lift);
@@ -147,6 +173,18 @@ export function reportPresence(
     Math.abs(record.lean - lean) > VISIBLE_MOVEMENT ||
     record.handlingChips !== input.handlingChips;
 
+  // A look, measured on the curl as it is broadcast rather than as reported:
+  // what counts is what somebody across the table could have seen.
+  const seen = quantisePeek(peek);
+  let looked = false;
+  if (record.lookArmed && seen >= LOOK.at) {
+    record.lookArmed = false;
+    record.looksThisHand++;
+    looked = true;
+  } else if (!record.lookArmed && seen < LOOK.rearmBelow) {
+    record.lookArmed = true;
+  }
+
   record.gaze = input.gaze;
   record.peek = peek;
   record.lift = lift;
@@ -154,6 +192,7 @@ export function reportPresence(
   record.handlingChips = input.handlingChips;
   record.lastReportAt = now;
   if (moved) record.lastMovedAt = now;
+  return { looked };
 }
 
 /**
@@ -197,6 +236,8 @@ export function resetForHand(presence: PresenceState, now: number): void {
     record.peekedHand = null;
     record.peeksThisHand = 0;
     record.peekMsThisHand = 0;
+    record.looksThisHand = 0;
+    record.lookArmed = true;
     record.peek = 0;
     record.lift = 0;
     record.lastReportAt = now;

@@ -23,9 +23,11 @@ import {
  * not the tuning itself: the tuning is the printed report, which is what
  * `npm run stress` shows at more length and against other numbers.
  *
- * Bots never re-check their cards or stare anybody down, so anything driven
- * by a player's own behaviour is invisible here. Real recordings — a server
- * started with `STRESS_TELEMETRY_DIR` — are what to tune those against.
+ * Bots look at their cards, re-check them when bet into, and occasionally sit
+ * on a decision until the clock nearly runs out — but at fixed rates, and never
+ * because of what they hold. So anything driven by a player's own behaviour is
+ * present here in shape only. Real recordings — a server started with
+ * `STRESS_TELEMETRY_DIR` — are what to tune those against.
  */
 
 const SEEDS = [20_260_909, 776_611, 31_337, 5_150];
@@ -81,6 +83,14 @@ describe('a whole evening of nerves', () => {
     // a person learns to ignore.
     expect(sixHanded.tellChangesPerMinute).toBeGreaterThan(0.5);
     expect(sixHanded.tellChangesPerMinute).toBeLessThan(15);
+  });
+
+  it('raises every event it has a name for', () => {
+    // The check that would have caught three dead events a phase earlier.
+    // `CLOCK_LOW`, `RE_CHECKED` and `WATCHED` had names, weights and comments,
+    // and nothing in the match ever raised them; no test of the arithmetic
+    // could have noticed. A weight connected to nothing is a lie in the tuning.
+    expect(sixHanded.neverFired).toEqual([]);
   });
 
   it('replays every evening exactly', () => {

@@ -36,6 +36,7 @@ import {
   settleStress,
   type StandingPressure,
   stressOf,
+  TRIGGERS,
   type StressTuning,
 } from './stress.js';
 import type { StressObserver } from './stress-telemetry.js';
@@ -151,6 +152,15 @@ export class Match {
   readonly #dealerRng: RandomSource;
   readonly #timings: MatchTimings;
   readonly #telemetry: StressObserver | null;
+  /** How long the current decision's clock was armed for, for `CLOCK_LOW`. */
+  #armedMs = 0;
+  /** The deadline `CLOCK_LOW` last fired for, so it fires once per decision. */
+  #clockLowFor: number | null = null;
+  /** Who the Dealer was looking at on the last tick, for `WATCHED`. */
+  #watchedSeat: number | null = null;
+  /** When each seat last felt a counted re-check, and a stare, for cooldowns. */
+  #lastRecheck = new Map<number, number>();
+  #lastWatched = new Map<number, number>();
   readonly #listeners = new Set<MatchListener>();
 
   #timer: TimerHandle | null = null;
@@ -210,9 +220,74 @@ export class Match {
     if (this.#disposed) return;
     const now = this.#clock.now();
     updateDealer(this.state.dealer, this.#dealerContext(now), this.#dealerRng, now);
+    this.#noticeStare(now);
+    this.#noticeClock(now);
     const pressures = this.#standingPressure(now);
     settleStress(this.state.stress, pressures, now);
     this.#telemetry?.settled(now, pressures, (seatIndex) => stressOf(this.state.stress, seatIndex, now));
+  }
+
+  /**
+   * The Dealer has just turned his head toward somebody.
+   *
+   * The standing floor already covers being looked at; this is the jolt of the
+   * moment he turns. Public: his gaze is in every presence frame.
+   */
+  #noticeStare(now: number): void {
+    const gaze = this.state.dealer.gaze;
+    const seat = gaze.kind === 'SEAT' ? gaze.seatIndex : null;
+    if (seat === this.#watchedSeat) return;
+    this.#watchedSeat = seat;
+    if (seat === null) return;
+
+    const seated = this.state.table?.seats.some((s) => s.seatIndex === seat && s.seated) ?? false;
+    const last = this.#lastWatched.get(seat);
+    if (!seated || (last !== undefined && now - last < TRIGGERS.watchedCooldownMs)) return;
+    this.#lastWatched.set(seat, now);
+    this.#spike(seat, 'WATCHED', 1, now);
+  }
+
+  /**
+   * The acting player's clock is nearly out.
+   *
+   * Once per decision, and only for a clock that started longer than the
+   * warning — a disconnected player's short clock would otherwise fire the
+   * instant it was armed. Public: the countdown is on everybody's screen.
+   */
+  #noticeClock(now: number): void {
+    const deadline = this.state.actionDeadline;
+    const seat = this.state.table?.hand?.actingSeat ?? null;
+    if (deadline === null || seat === null || deadline === this.#clockLowFor) return;
+    if (this.#armedMs <= TRIGGERS.clockLowMs || deadline - now > TRIGGERS.clockLowMs) return;
+    this.#clockLowFor = deadline;
+    this.#spike(seat, 'CLOCK_LOW', 1, now);
+  }
+
+  /**
+   * They lifted their cards to read them again.
+   *
+   * Counted from the curl the table receives (see `LOOK` in `presence.ts`), so
+   * it fires for exactly the movement everybody else could have watched. The
+   * first look of a hand is free — everybody has to look once — and folded
+   * players have nothing left to re-check.
+   */
+  #noticeRecheck(seatIndex: number, now: number): void {
+    const record = this.state.presence.find((r) => r.seatIndex === seatIndex);
+    if (!record || record.looksThisHand < 2) return;
+    const hand = this.state.table?.hand;
+    if (this.state.phase !== 'HAND_IN_PROGRESS' || !hand) return;
+    if (!hand.seats.some((s) => s.seatIndex === seatIndex && !s.folded)) return;
+
+    const last = this.#lastRecheck.get(seatIndex);
+    if (last !== undefined && now - last < TRIGGERS.recheckCooldownMs) return;
+    this.#lastRecheck.set(seatIndex, now);
+    this.#spike(seatIndex, 'RE_CHECKED', 1, now);
+  }
+
+  /** One stress event, to the model and to whoever is recording it. */
+  #spike(seatIndex: number, name: StressEvent, intensity: number, now: number): void {
+    applyStressEvent(this.state.stress, seatIndex, name, now, intensity);
+    this.#telemetry?.event(now, seatIndex, name, intensity);
   }
 
   /**
@@ -455,7 +530,9 @@ export class Match {
   reportPresence(playerId: string, input: PresenceInput): void {
     const player = findPlayer(this.state, playerId);
     if (!player || player.eliminatedAt !== null) return;
-    reportPresence(this.state.presence, player.seatIndex, input, this.#clock.now());
+    const now = this.#clock.now();
+    const { looked } = reportPresence(this.state.presence, player.seatIndex, input, now);
+    if (looked) this.#noticeRecheck(player.seatIndex, now);
   }
 
   /**
@@ -544,6 +621,7 @@ export class Match {
         : this.#timings.actionTimeoutMs;
 
     this.state.actionDeadline = this.#clock.now() + ms;
+    this.#armedMs = ms;
     this.#timer = this.#clock.setTimeout(() => this.#onActionTimeout(), ms);
   }
 
@@ -728,10 +806,8 @@ export class Match {
   #raiseStress(event: MatchEvent): void {
     const now = this.#clock.now();
     const table = this.state.table;
-    const spike = (seatIndex: number, name: StressEvent, intensity = 1) => {
-      applyStressEvent(this.state.stress, seatIndex, name, now, intensity);
-      this.#telemetry?.event(now, seatIndex, name, intensity);
-    };
+    const spike = (seatIndex: number, name: StressEvent, intensity = 1) =>
+      this.#spike(seatIndex, name, intensity, now);
     const everyone = (name: StressEvent, intensity = 1) => {
       for (const seat of table?.seats ?? []) {
         if (seat.seated) spike(seat.seatIndex, name, intensity);

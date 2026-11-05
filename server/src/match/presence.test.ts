@@ -10,6 +10,7 @@ import {
   resetForHand,
   type SeatFrame,
   type PresenceState,
+  LOOK,
 } from './presence.js';
 
 /**
@@ -193,6 +194,44 @@ describe('looking at your own cards', () => {
     expect(hasPeeked(presence, 0, 4)).toBe(false);
     expect(hasPeeked(presence, 1, 5)).toBe(false);
     expect(presence.find((r) => r.seatIndex === 0)!.peeksThisHand).toBe(0);
+  });
+
+  it('counts a look when the table could have seen one', () => {
+    // The replicated curl crossing the line where a rank becomes readable.
+    const presence = createPresence();
+    const look = (peek: number, at: number) => reportPresence(presence, 0, input({ peek }), at).looked;
+
+    expect(look(0.1, T0)).toBe(false);
+    expect(look(0.2, T0 + 50)).toBe(false);
+    expect(look(LOOK.at + 0.05, T0 + 100)).toBe(true);
+    // Holding them up is one look, not one per report.
+    expect(look(0.9, T0 + 150)).toBe(false);
+    expect(look(1, T0 + 200)).toBe(false);
+    expect(presence.find((r) => r.seatIndex === 0)!.looksThisHand).toBe(1);
+  });
+
+  it('does not count a corner hovering on the line as a dozen looks', () => {
+    const presence = createPresence();
+    let looks = 0;
+    for (let i = 0; i < 40; i++) {
+      const peek = LOOK.at + (i % 2 === 0 ? 0.04 : -0.04);
+      if (reportPresence(presence, 0, input({ peek }), T0 + i * 66).looked) looks++;
+    }
+    expect(looks).toBe(1);
+
+    // Down properly, and back up: that is a second look.
+    reportPresence(presence, 0, input({ peek: 0 }), T0 + 3_000);
+    expect(reportPresence(presence, 0, input({ peek: 0.8 }), T0 + 3_100).looked).toBe(true);
+    expect(presence.find((r) => r.seatIndex === 0)!.looksThisHand).toBe(2);
+  });
+
+  it('starts every hand at no looks', () => {
+    const presence = createPresence();
+    reportPresence(presence, 0, input({ peek: 1 }), T0);
+    resetForHand(presence, T0 + 1_000);
+    expect(presence.find((r) => r.seatIndex === 0)!.looksThisHand).toBe(0);
+    // And the cards were put down by the deal, so the first look counts at once.
+    expect(reportPresence(presence, 0, input({ peek: 1 }), T0 + 1_100).looked).toBe(true);
   });
 
   it('keeps the body across hands even though the look does not', () => {

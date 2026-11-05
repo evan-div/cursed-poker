@@ -256,8 +256,15 @@ Still open in this phase:
     but mostly through the floor, which tops out below where hands start to
     shake — so late shaking still comes from spikes, and bots cannot say
     whether that is enough. Needs real recordings
-  - three named events never fire: `CLOCK_LOW`, `RE_CHECKED` and `WATCHED`
-    have weights and nothing raises them
+  - three named events never fired: `CLOCK_LOW`, `RE_CHECKED` and `WATCHED`
+    had weights and nothing raised them. **Now wired**: a clock under eight
+    seconds, once per decision; the Dealer turning to you, at most once per
+    ten seconds; lifting your cards again in the same hand, counted from the
+    curl the table sees and at most once per four seconds. The profile now
+    requires every named event to happen in an ordinary evening
+  - with those wired, the Dealer's stare is the single largest source of
+    stress in a bot evening (about a quarter of everything added). Worth
+    checking against real recordings before deciding whether that is right
 
 ---
 

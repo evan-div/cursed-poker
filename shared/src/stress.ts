@@ -26,6 +26,11 @@
  *   - **what they themselves have been doing** — how often they have re-checked
  *     their cards, how long they have stared at them, how long they sat still
  *
+ * Of that last group, re-checking is wired (`RE_CHECKED`, counted from the curl
+ * the table receives). Time spent staring and time sitting still are recorded
+ * in presence but do not yet reach the model; `npm run stress` would show it
+ * if they did.
+ *
  * That last group is the one that makes the whole thing work. Those are already
  * public: lift and stillness have been replicated since Phase 4. So a tell does
  * not leak anything new — it *amplifies* what the table could already have seen

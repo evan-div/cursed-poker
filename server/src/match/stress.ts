@@ -73,6 +73,26 @@ export const DEFAULT_TUNING: StressTuning = {
   foldedShortWeight: 0.6,
 };
 
+/**
+ * When the three events that are about a player's own situation fire.
+ *
+ * Separate from `StressTuning` because these decide *whether something
+ * happened*, which a recording has already settled — replaying under another
+ * tuning re-weighs the same events, it does not invent new ones.
+ */
+export const TRIGGERS = {
+  /** `CLOCK_LOW` fires once per decision, when this much of the clock is left. */
+  clockLowMs: 8_000,
+  /**
+   * `RE_CHECKED` counts at most once in this long per seat. The table still
+   * sees every fidget; the heart only feels them this often, so a nervous
+   * player is visibly nervous rather than punished for every twitch.
+   */
+  recheckCooldownMs: 4_000,
+  /** `WATCHED` jolts at most once in this long per seat. */
+  watchedCooldownMs: 10_000,
+} as const;
+
 /** Fills in a partial tuning, including any event weights it leaves out. */
 export function resolveTuning(over: Partial<StressTuning> = {}): StressTuning {
   return {
