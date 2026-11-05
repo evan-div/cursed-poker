@@ -1,15 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  DEALER,
-  DEALER_POSTURES,
-  DEFAULT_BLIND_STRUCTURE,
-  type DealerPosture,
-  type LegalActions,
-  type PlayerAction,
-} from '@cursed/shared';
-import { SeededRandomSource } from '../poker/index.js';
-import { ManualClock } from './clock.js';
-import { Match } from './match.js';
+import { DEALER, DEALER_POSTURES, type DealerPosture } from '@cursed/shared';
+import { playEvening } from './simulate.js';
 
 /**
  * What the room actually does over a whole evening.
@@ -35,29 +26,6 @@ import { Match } from './match.js';
  * are only the floor beneath them.
  */
 
-/** Randomised but plausible: mostly passive, sometimes not. Mirrors the sim. */
-function chooseAction(legal: LegalActions, pot: number, rng: SeededRandomSource): PlayerAction {
-  const roll = rng.nextInt(100);
-  const size = () => {
-    const low = legal.minRaiseTo;
-    const high = Math.min(legal.maxRaiseTo, Math.max(low, pot + legal.callAmount * 2));
-    return high <= low ? low : low + rng.nextInt(high - low + 1);
-  };
-  const aggressive = (): PlayerAction =>
-    legal.raiseActionType === 'BET' ? { type: 'BET', to: size() } : { type: 'RAISE', to: size() };
-
-  if (legal.canCheck) {
-    if (roll < 60) return { type: 'CHECK' };
-    if (roll < 95 && legal.canRaise) return aggressive();
-    return { type: 'CHECK' };
-  }
-  if (roll < 32) return { type: 'FOLD' };
-  if (roll < 82) return { type: 'CALL' };
-  if (roll < 96 && legal.canRaise) return aggressive();
-  if (legal.canRaise || legal.canCall) return { type: 'ALL_IN' };
-  return { type: 'FOLD' };
-}
-
 interface Profile {
   minutes: number;
   hands: number;
@@ -67,96 +35,32 @@ interface Profile {
   curve: { minute: number; dread: number }[];
 }
 
-function playEvening(players: number, seed: number): Profile {
-  const clock = new ManualClock();
-  const started = clock.now();
-  const match = new Match({
-    roomCode: 'DREAD',
-    hostPlayerId: 'p0',
-    clock,
-    rng: new SeededRandomSource(seed),
-    dealerRng: new SeededRandomSource(seed * 7 + 1),
-    structure: DEFAULT_BLIND_STRUCTURE,
-    timings: {
-      actionTimeoutMs: 30_000,
-      disconnectedActionTimeoutMs: 5_000,
-      showdownDisplayMs: 4_000,
-      foldedHandDisplayMs: 1_500,
-      betweenHandsMs: 1_500,
+/** The shared bot evening (see `simulate.ts`), watched for the Dealer and the room. */
+function profileEvening(players: number, seed: number): Profile {
+  const postures = new Map<DealerPosture, number>();
+  const curve: { minute: number; dread: number }[] = [];
+  let started: number | null = null;
+  let nextSample = 5;
+
+  const evening = playEvening({
+    players,
+    seed,
+    onTick: (match, clock) => {
+      started ??= clock.now();
+      const frame = match.presenceFor();
+      postures.set(frame.dealer.posture, (postures.get(frame.dealer.posture) ?? 0) + 1);
+      const minute = (clock.now() - started) / 60_000;
+      if (minute >= nextSample) {
+        curve.push({ minute: nextSample, dread: frame.dread });
+        nextSample += 5;
+      }
     },
   });
 
-  const ids = Array.from({ length: players }, (_, i) => `p${i}`);
-  for (const id of ids) match.join(id, id);
-  for (const id of ids) match.setReady(id, true);
-  match.start('p0');
-
-  const brain = new SeededRandomSource(seed * 31 + 5);
-  const postures = new Map<DealerPosture, number>();
-  const curve: { minute: number; dread: number }[] = [];
-  let thinking = 0;
-  let nextSample = 5;
-  let hands = 0;
-  let lastHand = -1;
-  let guard = 0;
-
-  // The presence tick, exactly as `game-server.ts` runs it.
-  const STEP = 83;
-
-  while (match.state.status !== 'FINISHED' && guard++ < 400_000) {
-    match.tick();
-    const frame = match.presenceFor();
-    postures.set(frame.dealer.posture, (postures.get(frame.dealer.posture) ?? 0) + 1);
-
-    const minute = (clock.now() - started) / 60_000;
-    if (minute >= nextSample) {
-      curve.push({ minute: nextSample, dread: frame.dread });
-      nextSample += 5;
-    }
-
-    const hand = match.state.table?.hand ?? null;
-    if (hand && hand.handNumber !== lastHand) {
-      lastHand = hand.handNumber;
-      hands++;
-    }
-
-    const seat = hand?.actingSeat;
-    const actor =
-      seat === null || seat === undefined
-        ? null
-        : match.state.players.find((p) => p.seatIndex === seat)?.playerId;
-
-    if (actor && hand) {
-      // People think. Without it the whole match happens inside a few seconds
-      // of clock time, every deal is always "just now", and he reads as dealing
-      // continuously — which says nothing whatever about the real game.
-      if (thinking > 0) {
-        thinking -= STEP;
-        clock.advance(STEP);
-        continue;
-      }
-      const legal = match.viewFor(actor).you.legalActions;
-      if (!legal) {
-        clock.advance(STEP);
-        continue;
-      }
-      const pot = match.viewFor(actor).hand?.potTotal ?? 0;
-      try {
-        match.submitAction(actor, hand.handNumber, chooseAction(legal, pot, brain));
-      } catch {
-        match.submitAction(actor, hand.handNumber, { type: 'FOLD' });
-      }
-      thinking = 1_200 + (brain.nextInt(1000) / 1000) * 5_500;
-    } else {
-      thinking = 0;
-      clock.advance(STEP);
-    }
-  }
-
   return {
-    minutes: (clock.now() - started) / 60_000,
-    hands,
-    finalDread: match.presenceFor().dread,
+    minutes: evening.minutes,
+    hands: evening.hands,
+    finalDread: evening.match.presenceFor().dread,
     postures,
     curve,
   };
@@ -164,7 +68,7 @@ function playEvening(players: number, seed: number): Profile {
 
 describe('a whole evening', () => {
   it('reaches every posture it has a name for, except the last one', () => {
-    const evening = playEvening(6, 20_260_909);
+    const evening = profileEvening(6, 20_260_909);
     const ticks = [...evening.postures.values()].reduce((a, b) => a + b, 0);
 
     const share = (posture: DealerPosture) => (evening.postures.get(posture) ?? 0) / ticks;
@@ -192,7 +96,7 @@ describe('a whole evening', () => {
     // pinned to one of them is a floor pinned to luck. A thirteen-minute match
     // *should* end lighter than a fifty-minute one; what must not happen is a
     // long evening ending where it started.
-    const evenings = [776_611, 20_260_909, 31_337, 5_150].map((seed) => playEvening(6, seed));
+    const evenings = [776_611, 20_260_909, 31_337, 5_150].map((seed) => profileEvening(6, seed));
     for (const evening of evenings) {
       console.log(
         `  ${evening.minutes.toFixed(0).padStart(3)} min, ${String(evening.hands).padStart(3)} hands` +
@@ -217,7 +121,7 @@ describe('a whole evening', () => {
   });
 
   it('stands, once it is bad enough, and does not sit back down', () => {
-    const evening = playEvening(6, 20_260_909);
+    const evening = profileEvening(6, 20_260_909);
     const ticks = [...evening.postures.values()].reduce((a, b) => a + b, 0);
     const risen = (evening.postures.get('RISEN') ?? 0) / ticks;
     console.log(`  risen for ${(risen * 100).toFixed(1)}% of a ${evening.minutes.toFixed(0)}-min match`);

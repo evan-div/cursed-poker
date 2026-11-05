@@ -35,7 +35,10 @@ import {
   forgetStress,
   settleStress,
   type StandingPressure,
+  stressOf,
+  type StressTuning,
 } from './stress.js';
+import type { StressObserver } from './stress-telemetry.js';
 import type { StressEvent } from '@cursed/shared';
 import {
   elapsedMs,
@@ -108,6 +111,14 @@ export interface MatchOptions {
   /** The Dealer's source of chance. Never the deck's — see `Match#dealerRng`. */
   dealerRng?: RandomSource;
   timings?: Partial<MatchTimings>;
+  /** The stress model's numbers. Defaults to the shipped tuning. */
+  stressTuning?: Partial<StressTuning>;
+  /**
+   * Somebody listening to the stress model's inputs — see
+   * `stress-telemetry.ts`. Hears only what the model itself reads, which is
+   * only what is public.
+   */
+  telemetry?: StressObserver;
 }
 
 /**
@@ -139,6 +150,7 @@ export class Match {
    */
   readonly #dealerRng: RandomSource;
   readonly #timings: MatchTimings;
+  readonly #telemetry: StressObserver | null;
   readonly #listeners = new Set<MatchListener>();
 
   #timer: TimerHandle | null = null;
@@ -150,6 +162,7 @@ export class Match {
     this.#rng = options.rng ?? new CryptoRandomSource();
     this.#dealerRng = options.dealerRng ?? new CryptoRandomSource();
     this.#timings = { ...DEFAULT_TIMINGS, ...options.timings };
+    this.#telemetry = options.telemetry ?? null;
 
     this.state = {
       roomCode: options.roomCode,
@@ -161,7 +174,7 @@ export class Match {
       structure: options.structure ?? DEFAULT_BLIND_STRUCTURE,
       table: null,
       presence: createPresence(),
-      stress: createStress(),
+      stress: createStress(options.stressTuning),
       dealer: createDealer(this.#clock.now()),
       startingPlayers: 0,
       sacrifices: 0,
@@ -197,7 +210,9 @@ export class Match {
     if (this.#disposed) return;
     const now = this.#clock.now();
     updateDealer(this.state.dealer, this.#dealerContext(now), this.#dealerRng, now);
-    settleStress(this.state.stress, this.#standingPressure(now), now);
+    const pressures = this.#standingPressure(now);
+    settleStress(this.state.stress, pressures, now);
+    this.#telemetry?.settled(now, pressures, (seatIndex) => stressOf(this.state.stress, seatIndex, now));
   }
 
   /**
@@ -213,7 +228,10 @@ export class Match {
     if (!table) return [];
 
     const bigBlind = levelAt(this.state.structure, table.levelIndex).bigBlind;
-    const dread = roomDread(this.state, now);
+    // To a thousandth. Far finer than the floor can feel, and coarse enough
+    // that the room's slow darkening does not change every seat's pressure on
+    // every tick — which is what lets a recording store only the changes.
+    const dread = Math.round(roomDread(this.state, now) * 1000) / 1000;
     const watching = this.state.dealer.gaze;
     const watchedSeat = watching.kind === 'SEAT' ? watching.seatIndex : null;
     const hand = table.hand;
@@ -322,6 +340,7 @@ export class Match {
     if (index < 0) return;
     forgetSeat(this.state.presence, this.state.players[index]!.seatIndex);
     forgetStress(this.state.stress, this.state.players[index]!.seatIndex);
+    this.#telemetry?.forgot(this.#clock.now(), this.state.players[index]!.seatIndex);
     this.state.players.splice(index, 1);
 
     if (this.state.hostPlayerId === playerId && this.state.players[0]) {
@@ -709,8 +728,10 @@ export class Match {
   #raiseStress(event: MatchEvent): void {
     const now = this.#clock.now();
     const table = this.state.table;
-    const spike = (seatIndex: number, name: StressEvent, intensity = 1) =>
+    const spike = (seatIndex: number, name: StressEvent, intensity = 1) => {
       applyStressEvent(this.state.stress, seatIndex, name, now, intensity);
+      this.#telemetry?.event(now, seatIndex, name, intensity);
+    };
     const everyone = (name: StressEvent, intensity = 1) => {
       for (const seat of table?.seats ?? []) {
         if (seat.seated) spike(seat.seatIndex, name, intensity);

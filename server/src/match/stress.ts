@@ -34,7 +34,53 @@ import {
  *
  * Plain data plus free functions, like `presence.ts` and `dealer.ts`, so it
  * snapshots and replays with the rest of the match.
+ *
+ * The numbers it runs on travel *with* the state rather than being imported at
+ * each use. That is what makes it tunable from data: `stress-telemetry.ts`
+ * records everything that went into this model during a match, and replays it
+ * through a different `StressTuning` to show what the same evening would have
+ * felt like under other numbers.
  */
+
+/**
+ * Every number the model runs on.
+ *
+ * Defaults are the shipped tuning, from `shared/src/stress.ts`; the extra
+ * fields below are the weights inside `floorFor`, which used to be literals.
+ */
+export interface StressTuning {
+  weights: Record<StressEvent, { spike: number; relief: number }>;
+  halfLifeMs: number;
+  floorWeight: number;
+  desperateBlinds: number;
+  comfortableBlinds: number;
+  /** How much of the room's dread reaches each seat's floor. */
+  roomWeight: number;
+  /** How much the Dealer's stare adds to a floor. */
+  watchedWeight: number;
+  /** How much of a short stack still weighs on somebody sitting a hand out. */
+  foldedShortWeight: number;
+}
+
+export const DEFAULT_TUNING: StressTuning = {
+  weights: STRESS_WEIGHTS,
+  halfLifeMs: STRESS.halfLifeMs,
+  floorWeight: STRESS.floorWeight,
+  desperateBlinds: STRESS.desperateBlinds,
+  comfortableBlinds: STRESS.comfortableBlinds,
+  roomWeight: 0.45,
+  watchedWeight: 0.25,
+  foldedShortWeight: 0.6,
+};
+
+/** Fills in a partial tuning, including any event weights it leaves out. */
+export function resolveTuning(over: Partial<StressTuning> = {}): StressTuning {
+  return {
+    ...DEFAULT_TUNING,
+    ...over,
+    weights: { ...DEFAULT_TUNING.weights, ...(over.weights ?? {}) },
+  };
+}
 
 export interface SeatStressRecord {
   seatIndex: number;
@@ -60,14 +106,17 @@ export interface SeatStressRecord {
   lastEventAt: number | null;
 }
 
-export type StressState = SeatStressRecord[];
+export interface StressState {
+  tuning: StressTuning;
+  seats: SeatStressRecord[];
+}
 
-export function createStress(): StressState {
-  return [];
+export function createStress(tuning: Partial<StressTuning> = {}): StressState {
+  return { tuning: resolveTuning(tuning), seats: [] };
 }
 
 function find(stress: StressState, seatIndex: number): SeatStressRecord | undefined {
-  return stress.find((record) => record.seatIndex === seatIndex);
+  return stress.seats.find((record) => record.seatIndex === seatIndex);
 }
 
 function recordFor(stress: StressState, seatIndex: number, now: number): SeatStressRecord {
@@ -81,7 +130,7 @@ function recordFor(stress: StressState, seatIndex: number, now: number): SeatStr
       lastEvent: null,
       lastEventAt: null,
     };
-    stress.push(record);
+    stress.seats.push(record);
   }
   return record;
 }
@@ -93,13 +142,13 @@ function recordFor(stress: StressState, seatIndex: number, now: number): SeatStr
  * read and on write rather than on a tick: there is no reason for an idle table
  * to burn CPU being calm, and a lazily decayed value is the same value.
  */
-function decay(record: SeatStressRecord, now: number): void {
+function decay(record: SeatStressRecord, now: number, tuning: StressTuning): void {
   const elapsed = Math.max(0, now - record.decayedAt);
   record.decayedAt = now;
   if (elapsed === 0 || record.spike <= 0) return;
 
-  const relief = record.lastEvent ? STRESS_WEIGHTS[record.lastEvent].relief : 1;
-  const halfLife = STRESS.halfLifeMs / Math.max(relief, 0.05);
+  const relief = record.lastEvent ? tuning.weights[record.lastEvent].relief : 1;
+  const halfLife = tuning.halfLifeMs / Math.max(relief, 0.05);
   record.spike *= Math.pow(0.5, elapsed / halfLife);
   if (record.spike < 1e-4) record.spike = 0;
 }
@@ -119,10 +168,10 @@ export function applyStressEvent(
   intensity = 1,
 ): void {
   const record = recordFor(stress, seatIndex, now);
-  decay(record, now);
+  decay(record, now, stress.tuning);
 
   const scaled = Math.min(Math.max(intensity, 0), 1);
-  record.spike = Math.min(1, record.spike + STRESS_WEIGHTS[event].spike * scaled);
+  record.spike = Math.min(1, record.spike + stress.tuning.weights[event].spike * scaled);
   record.lastEvent = event;
   record.lastEventAt = now;
 }
@@ -147,19 +196,19 @@ export interface StandingPressure {
   inHand: boolean;
 }
 
-export function floorFor(pressure: StandingPressure): number {
+export function floorFor(pressure: StandingPressure, tuning: StressTuning = DEFAULT_TUNING): number {
   // Short-stacked. The one that makes a tournament a tournament.
-  const span = STRESS.comfortableBlinds - STRESS.desperateBlinds;
-  const shortness = clamp01((STRESS.comfortableBlinds - pressure.stackBlinds) / span);
-  const short = pressure.inHand ? shortness : shortness * 0.6;
+  const span = tuning.comfortableBlinds - tuning.desperateBlinds;
+  const shortness = clamp01((tuning.comfortableBlinds - pressure.stackBlinds) / span);
+  const short = pressure.inHand ? shortness : shortness * tuning.foldedShortWeight;
 
   // The room itself. Everybody feels this one, and it only goes up.
-  const room = pressure.dread * 0.45;
+  const room = pressure.dread * tuning.roomWeight;
 
   // Something at the head of the table is looking at you.
-  const watched = pressure.watched ? 0.25 : 0;
+  const watched = pressure.watched ? tuning.watchedWeight : 0;
 
-  return clamp01(Math.max(short, room, watched) * STRESS.floorWeight);
+  return clamp01(Math.max(short, room, watched) * tuning.floorWeight);
 }
 
 /** Recomputes the standing floor for every seat given. */
@@ -170,8 +219,8 @@ export function settleStress(
 ): void {
   for (const pressure of pressures) {
     const record = recordFor(stress, pressure.seatIndex, now);
-    decay(record, now);
-    record.floor = floorFor(pressure);
+    decay(record, now, stress.tuning);
+    record.floor = floorFor(pressure, stress.tuning);
   }
 }
 
@@ -179,7 +228,7 @@ export function settleStress(
 export function stressOf(stress: StressState, seatIndex: number, now: number): number {
   const record = find(stress, seatIndex);
   if (!record) return 0;
-  decay(record, now);
+  decay(record, now, stress.tuning);
   return clamp01(Math.max(record.floor, record.floor + record.spike * (1 - record.floor)));
 }
 
@@ -214,8 +263,8 @@ export function projectSelfStress(
  * things to say about what is left behind.
  */
 export function forgetStress(stress: StressState, seatIndex: number): void {
-  const index = stress.findIndex((record) => record.seatIndex === seatIndex);
-  if (index >= 0) stress.splice(index, 1);
+  const index = stress.seats.findIndex((record) => record.seatIndex === seatIndex);
+  if (index >= 0) stress.seats.splice(index, 1);
 }
 
 function clamp01(value: number): number {

@@ -248,7 +248,16 @@ Still open in this phase:
       tables identical tells for one seat and different everything-else, and
       requires identical motion. Your own hands shake on your screen exactly as
       they do on everybody else's, from the same broadcast
-- [ ] Telemetry/replay harness so tuning is data-driven
+- [x] Telemetry/replay harness so tuning is data-driven. Matches record the
+      stress model's public inputs (opt-in, `STRESS_TELEMETRY_DIR`); recordings
+      replay under any tuning; `npm run stress` compares tunings over simulated
+      or recorded evenings. First findings, from bots:
+  - stress does rise across an evening (mean 0.13 → 0.22 by the last quarter),
+    but mostly through the floor, which tops out below where hands start to
+    shake — so late shaking still comes from spikes, and bots cannot say
+    whether that is enough. Needs real recordings
+  - three named events never fire: `CLOCK_LOW`, `RE_CHECKED` and `WATCHED`
+    have weights and nothing raises them
 
 ---
 

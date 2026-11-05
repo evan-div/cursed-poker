@@ -3,6 +3,9 @@ import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, type BlindStructure } from '@curs
 import { Match, type MatchTimings } from '../match/match.js';
 import type { Clock } from '../match/clock.js';
 import type { RandomSource } from '../poker/index.js';
+import { resolveTuning } from '../match/stress.js';
+import { StressRecorder } from '../match/stress-telemetry.js';
+import type { StressLogSink } from './stress-log-sink.js';
 
 /**
  * Lobbies.
@@ -20,11 +23,18 @@ export interface RoomManagerOptions {
   timings?: Partial<MatchTimings>;
   /** How long an empty room lingers before it is swept away. */
   emptyRoomTtlMs?: number;
+  /**
+   * Where to keep each match's stress recording, if anywhere. Off unless set:
+   * see `STRESS_TELEMETRY_DIR` in `main.ts`.
+   */
+  stressLogs?: StressLogSink;
 }
 
 export interface Room {
   code: string;
   match: Match;
+  /** Writes this match's stress recording, once. A no-op without a sink. */
+  saveStress: () => void;
   createdAt: number;
   /** When the room last had a connected player, for sweeping. */
   lastOccupiedAt: number;
@@ -44,6 +54,8 @@ export class RoomManager {
 
   create(hostPlayerId: string): Room {
     const code = this.#allocateCode();
+    const sink = this.#options.stressLogs;
+    const recorder = sink ? new StressRecorder({ tuning: resolveTuning() }) : null;
     const match = new Match({
       roomCode: code,
       hostPlayerId,
@@ -51,10 +63,28 @@ export class RoomManager {
       ...(this.#options.rng ? { rng: this.#options.rng } : {}),
       ...(this.#options.structure ? { structure: this.#options.structure } : {}),
       ...(this.#options.timings ? { timings: this.#options.timings } : {}),
+      ...(recorder ? { telemetry: recorder } : {}),
     });
 
+    // Saved when the match ends, or when an unfinished one is swept away — a
+    // match abandoned at the forty-minute mark is still forty minutes of data.
+    // A lobby that never started has nothing worth keeping.
+    let saved = false;
+    const saveStress = () => {
+      if (saved || !sink || !recorder || match.state.status === 'LOBBY') return;
+      saved = true;
+      sink.save(recorder.log).catch((error: unknown) => {
+        console.warn('[cursed-poker] could not save a stress recording:', error);
+      });
+    };
+    if (sink) {
+      match.onUpdate((events) => {
+        if (events.some((event) => event.type === 'MATCH_ENDED')) saveStress();
+      });
+    }
+
     const now = this.#options.clock.now();
-    const room: Room = { code, match, createdAt: now, lastOccupiedAt: now };
+    const room: Room = { code, match, saveStress, createdAt: now, lastOccupiedAt: now };
     this.#rooms.set(code, room);
     return room;
   }
@@ -71,6 +101,7 @@ export class RoomManager {
   remove(code: string): void {
     const room = this.#rooms.get(code);
     if (!room) return;
+    room.saveStress();
     room.match.dispose();
     this.#rooms.delete(code);
   }

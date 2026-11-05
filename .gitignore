@@ -11,3 +11,7 @@ coverage/
 
 # Generated on first `npm run dev`, so lobbies survive a server restart.
 .dev-session-secret
+
+# Stress recordings, from `STRESS_TELEMETRY_DIR` or `npm run stress -- --save`.
+.telemetry/
+*.stress.json

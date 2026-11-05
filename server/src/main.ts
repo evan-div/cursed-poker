@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { Server as SocketIoServer } from 'socket.io';
 import { GameServer } from './net/game-server.js';
 import { SocketIoTransport } from './net/socketio-transport.js';
+import { DirectorySink } from './net/stress-log-sink.js';
 import type { BlindStructure } from '@cursed/shared';
 
 /**
@@ -80,12 +81,23 @@ const timings = {
   ...(actionTimeoutMs > 0 ? { actionTimeoutMs } : {}),
 };
 
+/**
+ * Recording what the stress model was fed, match by match, for `npm run
+ * stress -- --log`. Off unless asked for. The files hold no cards, no names and
+ * no lobby codes — see `stress-telemetry.ts` — but they are still a record of
+ * how people played, so keeping them is a choice somebody makes on purpose.
+ */
+const STRESS_TELEMETRY_DIR = process.env.STRESS_TELEMETRY_DIR;
+
 const gameServer = new GameServer({
   transport: new SocketIoTransport(io),
   ...(process.env.SESSION_SECRET ? { sessionSecret: process.env.SESSION_SECRET } : {}),
   ...(fast ? { structure: FAST_STRUCTURE } : {}),
   ...(Object.keys(timings).length > 0 ? { timings } : {}),
+  ...(STRESS_TELEMETRY_DIR ? { stressLogs: new DirectorySink(STRESS_TELEMETRY_DIR) } : {}),
 });
+
+if (STRESS_TELEMETRY_DIR) console.log(`[cursed-poker] recording stress telemetry to ${STRESS_TELEMETRY_DIR}`);
 
 if (fast) console.log('[cursed-poker] DEV_FAST: three big blinds each, short clocks');
 if (actionTimeoutMs > 0) console.log(`[cursed-poker] action clock overridden to ${actionTimeoutMs}ms`);

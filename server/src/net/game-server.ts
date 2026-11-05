@@ -14,6 +14,7 @@ import { SystemClock, type Clock, type TimerHandle } from '../match/clock.js';
 import type { RandomSource } from '../poker/index.js';
 import { RateLimiter } from './rate-limit.js';
 import { RoomManager, type Room } from './rooms.js';
+import type { StressLogSink } from './stress-log-sink.js';
 import { SessionManager, newPlayerId } from './sessions.js';
 import type { AckFn, Connection, Transport } from './transport.js';
 
@@ -47,6 +48,8 @@ export interface GameServerOptions {
   presencePerSecond?: number;
   /** How often the table's bodies are broadcast. Zero disables the tick. */
   presenceHz?: number;
+  /** Where to keep each match's stress recording. See `stress-telemetry.ts`. */
+  stressLogs?: StressLogSink;
 }
 
 interface ConnectionState {
@@ -85,6 +88,7 @@ export class GameServer {
       ...(options.rng ? { rng: options.rng } : {}),
       ...(options.structure ? { structure: options.structure } : {}),
       ...(options.timings ? { timings: options.timings } : {}),
+      ...(options.stressLogs ? { stressLogs: options.stressLogs } : {}),
     });
 
     const perSecond = options.messagesPerSecond ?? 20;

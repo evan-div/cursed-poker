@@ -4,6 +4,8 @@ import { ManualClock } from '../match/clock.js';
 import { RateLimiter } from './rate-limit.js';
 import { RoomManager, generateRoomCode } from './rooms.js';
 import { SessionManager, newPlayerId } from './sessions.js';
+import type { StressLogSink } from './stress-log-sink.js';
+import type { StressLog } from '../match/stress-telemetry.js';
 
 describe('session tokens', () => {
   const sessions = new SessionManager({ secret: 'a-secret-long-enough-for-tests' });
@@ -152,5 +154,73 @@ describe('rooms', () => {
     clock.advance(2_000);
     expect(rooms.sweep()).toBe(1);
     expect(rooms.size).toBe(0);
+  });
+});
+
+describe('stress recordings', () => {
+  /** Two big blinds each and one level, so a match ends in a few all-ins. */
+  const SHORT = {
+    id: 'short',
+    label: 'Short',
+    startingStackBigBlinds: 2,
+    levels: [{ level: 1, smallBlind: 50, bigBlind: 100, ante: 0, durationSeconds: 36_000 }],
+  };
+
+  function sinkInto(saved: StressLog[]): StressLogSink {
+    return { save: async (log) => void saved.push(log) };
+  }
+
+  function startedRoom(rooms: RoomManager) {
+    const room = rooms.create('a');
+    for (const id of ['a', 'b', 'c', 'd']) room.match.join(id, id);
+    for (const id of ['a', 'b', 'c', 'd']) room.match.setReady(id, true);
+    room.match.start('a');
+    return room;
+  }
+
+  it('keeps one recording per finished match', () => {
+    const clock = new ManualClock();
+    const saved: StressLog[] = [];
+    const rooms = new RoomManager({ clock, structure: SHORT, stressLogs: sinkInto(saved) });
+    const room = startedRoom(rooms);
+
+    for (let guard = 0; room.match.state.status !== 'FINISHED' && guard < 2_000; guard++) {
+      room.match.tick();
+      const hand = room.match.state.table?.hand;
+      const seat = hand?.actingSeat;
+      const actor = room.match.state.players.find((p) => p.seatIndex === seat);
+      if (hand && actor) room.match.submitAction(actor.playerId, hand.handNumber, { type: 'ALL_IN' });
+      else clock.advance(100);
+    }
+    expect(room.match.state.status).toBe('FINISHED');
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.entries.some((e) => e[0] === 'E' && e[3] === 'SHOVED')).toBe(true);
+
+    // And not again when the finished room is cleared away.
+    rooms.remove(room.code);
+    expect(saved).toHaveLength(1);
+  });
+
+  it('keeps an abandoned match, and not a lobby that never started', () => {
+    const clock = new ManualClock();
+    const saved: StressLog[] = [];
+    const rooms = new RoomManager({ clock, stressLogs: sinkInto(saved) });
+
+    const lobby = rooms.create('x');
+    lobby.match.join('x', 'x');
+    rooms.remove(lobby.code);
+    expect(saved).toHaveLength(0);
+
+    const room = startedRoom(rooms);
+    room.match.tick();
+    rooms.remove(room.code);
+    expect(saved).toHaveLength(1);
+  });
+
+  it('records nothing at all without somewhere to put it', () => {
+    const rooms = new RoomManager({ clock: new ManualClock() });
+    const room = startedRoom(rooms);
+    room.match.tick();
+    expect(() => rooms.remove(room.code)).not.toThrow();
   });
 });

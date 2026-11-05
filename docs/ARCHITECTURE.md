@@ -402,6 +402,18 @@ feels tense." Mitigation: build a replay/telemetry harness early (record inputs,
 replay matches, inspect stress curves offline) so balancing is data-driven rather
 than vibes-driven.
 
+*Built in Phase 6* (`server/src/match/stress-telemetry.ts`). A match records the
+stress model's **inputs** — named events with their intensities, and changes in
+each seat's standing pressure — never its cards, and never anybody's name or
+lobby code. The format is an allowlist of number tuples, held by a test. A
+recording replays through any `StressTuning` and lands, under its own tuning,
+on what the players felt to within floating-point rounding. `npm run stress`
+plays simulated evenings (or loads real ones from a server started with
+`STRESS_TELEMETRY_DIR`) and prints them under the shipped tuning beside a
+candidate: time spent calm, shaking, soaked or pinned, how the evening rose
+quarter by quarter, which events did the work and which never fired.
+`stress-profile.test.ts` holds the design's floor over simulated evenings.
+
 **Long-lived server state.** A 90-minute match with reconnects means room state
 must survive disconnects and ideally a server restart. Mitigation: keep
 `TableState` and match state plain-JSON serializable — already true — so
