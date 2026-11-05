@@ -37,6 +37,7 @@ import {
   type StandingPressure,
   stressOf,
   TRIGGERS,
+  stareIntensity,
   type StressTuning,
 } from './stress.js';
 import type { StressObserver } from './stress-telemetry.js';
@@ -231,7 +232,9 @@ export class Match {
    * The Dealer has just turned his head toward somebody.
    *
    * The standing floor already covers being looked at; this is the jolt of the
-   * moment he turns. Public: his gaze is in every presence frame.
+   * moment he turns, and it lands harder the darker the room has got — see
+   * `stareIntensity`. Public: his gaze and the room's dread are both in every
+   * presence frame.
    */
   #noticeStare(now: number): void {
     const gaze = this.state.dealer.gaze;
@@ -244,7 +247,7 @@ export class Match {
     const last = this.#lastWatched.get(seat);
     if (!seated || (last !== undefined && now - last < TRIGGERS.watchedCooldownMs)) return;
     this.#lastWatched.set(seat, now);
-    this.#spike(seat, 'WATCHED', 1, now);
+    this.#spike(seat, 'WATCHED', stareIntensity(this.#dread(now)), now);
   }
 
   /**
@@ -284,6 +287,17 @@ export class Match {
     this.#spike(seatIndex, 'RE_CHECKED', 1, now);
   }
 
+  /**
+   * The room's dread, as the stress model reads it.
+   *
+   * To a thousandth. Far finer than anything can feel, and coarse enough that
+   * the room's slow darkening does not change every seat's pressure on every
+   * tick — which is what lets a recording store only the changes.
+   */
+  #dread(now: number): number {
+    return Math.round(roomDread(this.state, now) * 1000) / 1000;
+  }
+
   /** One stress event, to the model and to whoever is recording it. */
   #spike(seatIndex: number, name: StressEvent, intensity: number, now: number): void {
     applyStressEvent(this.state.stress, seatIndex, name, now, intensity);
@@ -303,10 +317,7 @@ export class Match {
     if (!table) return [];
 
     const bigBlind = levelAt(this.state.structure, table.levelIndex).bigBlind;
-    // To a thousandth. Far finer than the floor can feel, and coarse enough
-    // that the room's slow darkening does not change every seat's pressure on
-    // every tick — which is what lets a recording store only the changes.
-    const dread = Math.round(roomDread(this.state, now) * 1000) / 1000;
+    const dread = this.#dread(now);
     const watching = this.state.dealer.gaze;
     const watchedSeat = watching.kind === 'SEAT' ? watching.seatIndex : null;
     const hand = table.hand;

@@ -262,9 +262,13 @@ Still open in this phase:
     ten seconds; lifting your cards again in the same hand, counted from the
     curl the table sees and at most once per four seconds. The profile now
     requires every named event to happen in an ordinary evening
-  - with those wired, the Dealer's stare is the single largest source of
-    stress in a bot evening (about a quarter of everything added). Worth
-    checking against real recordings before deciding whether that is right
+  - with those wired, the Dealer's stare was the single largest source of
+    stress in a bot evening (about a quarter of everything added), from the
+    first hand on. **Now scaled with dread**: a stare lands at a fifth of its
+    weight in a fresh room and at full weight in a dark one. Same evenings,
+    same 412 stares: their share fell from 41.2 to 18.8 (about a seventh),
+    the first quarter got calmer (0.147 → 0.130) while the last barely moved
+    (0.262 → 0.255), so the evening's rise is steeper
 
 ---
 

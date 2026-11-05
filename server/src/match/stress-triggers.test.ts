@@ -3,7 +3,7 @@ import { GAZE_AWAY, type PresenceInput, type StressEvent } from '@cursed/shared'
 import { SeededRandomSource } from '../poker/index.js';
 import { ManualClock } from './clock.js';
 import { Match, type MatchTimings } from './match.js';
-import { TRIGGERS } from './stress.js';
+import { TRIGGERS, stareIntensity } from './stress.js';
 import type { StressObserver } from './stress-telemetry.js';
 
 /**
@@ -20,13 +20,14 @@ interface Heard {
   at: number;
   seat: number;
   event: StressEvent;
+  intensity: number;
 }
 
 function table(timings: Partial<MatchTimings> = {}) {
   const clock = new ManualClock();
   const heard: Heard[] = [];
   const observer: StressObserver = {
-    event: (at, seat, event) => void heard.push({ at, seat, event }),
+    event: (at, seat, event, intensity) => void heard.push({ at, seat, event, intensity }),
     settled: () => {},
     forgot: () => {},
   };
@@ -204,5 +205,40 @@ describe('WATCHED', () => {
     t.wait(TRIGGERS.watchedCooldownMs);
     turnTo(1);
     expect(t.of('WATCHED').filter((w) => w.seat === 1)).toHaveLength(2);
+  });
+
+  it('lands harder the darker the room has got', () => {
+    expect(stareIntensity(0)).toBeCloseTo(TRIGGERS.watchedCalm, 9);
+    expect(stareIntensity(1)).toBe(1);
+    for (let d = 0; d < 1; d += 0.05) {
+      expect(stareIntensity(d + 0.05)).toBeGreaterThan(stareIntensity(d));
+    }
+    // Never nothing: even in a fresh room, he is still looking at you.
+    expect(stareIntensity(0)).toBeGreaterThan(0);
+  });
+
+  it('weighs a stare by the dread everybody can see at that moment', () => {
+    const t = table({ actionTimeoutMs: 10 * 60_000 });
+    const dealer = t.match.state.dealer;
+    const stareAt = (seat: number) => {
+      dealer.nextDecisionAt = t.clock.now() + 1_000_000;
+      dealer.gaze = { kind: 'SEAT', seatIndex: seat };
+      t.clock.advance(100);
+      t.match.tick();
+      const jolt = t.of('WATCHED').at(-1)!;
+      expect(jolt.seat).toBe(seat);
+      return { intensity: jolt.intensity, dread: t.match.presenceFor().dread };
+    };
+
+    const early = stareAt(1);
+    expect(early.intensity).toBeCloseTo(stareIntensity(early.dread), 2);
+
+    // An hour on, with nobody acting: the room has darkened on its own.
+    dealer.gaze = GAZE_AWAY;
+    t.wait(60 * 60_000, 60_000);
+    const late = stareAt(2);
+    expect(late.dread).toBeGreaterThan(early.dread + 0.2);
+    expect(late.intensity).toBeCloseTo(stareIntensity(late.dread), 2);
+    expect(late.intensity).toBeGreaterThan(early.intensity);
   });
 });

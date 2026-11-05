@@ -91,7 +91,23 @@ export const TRIGGERS = {
   recheckCooldownMs: 4_000,
   /** `WATCHED` jolts at most once in this long per seat. */
   watchedCooldownMs: 10_000,
+  /**
+   * How hard his stare lands in a room that has not darkened yet, as a share
+   * of its full weight. It grows with the room's dread to the full jolt.
+   *
+   * Flat, it was the largest single source of stress in an evening — about a
+   * quarter of everything — from the first hand on, when the room is barely
+   * wrong and he is just a man dealing cards. Scaled, being looked at by him
+   * becomes one of the ways the evening gets worse rather than a constant.
+   */
+  watchedCalm: 0.2,
 } as const;
+
+/** How hard the Dealer's stare lands, given how dark the room has become. */
+export function stareIntensity(dread: number): number {
+  const d = Math.min(Math.max(Number.isFinite(dread) ? dread : 0, 0), 1);
+  return TRIGGERS.watchedCalm + (1 - TRIGGERS.watchedCalm) * d;
+}
 
 /** Fills in a partial tuning, including any event weights it leaves out. */
 export function resolveTuning(over: Partial<StressTuning> = {}): StressTuning {
