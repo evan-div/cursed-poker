@@ -1,6 +1,7 @@
 import {
   CLIENT_MESSAGE_SCHEMAS,
   PRESENCE,
+  STRESS,
   PRESENCE_MESSAGES,
   type BlindStructure,
   type ClientMessageName,
@@ -69,6 +70,9 @@ export class GameServer {
   readonly #presenceLimiter: RateLimiter;
   readonly #presenceIntervalMs: number;
   #presenceTimer: TimerHandle | null = null;
+  /** Presence ticks between private self frames. See `STRESS.selfHz`. */
+  #selfEvery = 1;
+  #selfCountdown = 0;
 
   constructor(options: GameServerOptions) {
     this.#clock = options.clock ?? new SystemClock();
@@ -107,6 +111,7 @@ export class GameServer {
 
     const presenceHz = options.presenceHz ?? PRESENCE.broadcastHz;
     this.#presenceIntervalMs = presenceHz > 0 ? Math.round(1000 / presenceHz) : 0;
+    this.#selfEvery = Math.max(1, Math.round(presenceHz / STRESS.selfHz));
 
     this.#transport.onConnection((connection) => this.#onConnection(connection));
   }
@@ -348,6 +353,11 @@ export class GameServer {
     const tick = () => {
       this.#presenceTimer = null;
       let talkedToAnyone = false;
+      // Slower than presence: a heart rate does not need twelve updates a
+      // second, and the client eases between them anyway.
+      this.#selfCountdown -= 1;
+      const sendSelf = this.#selfCountdown <= 0;
+      if (sendSelf) this.#selfCountdown = this.#selfEvery;
 
       for (const [code, sockets] of this.#roomSockets) {
         const room = this.rooms.get(code);
@@ -357,6 +367,14 @@ export class GameServer {
         room.match.tick();
         const frame = room.match.presenceFor();
         for (const connection of sockets.values()) connection.send('presence', frame);
+
+        // Each player's own heart, to that player and nobody else. Keyed by
+        // the player this socket belongs to — never by seat, never broadcast.
+        if (sendSelf) {
+          for (const [playerId, connection] of sockets) {
+            connection.send('self', room.match.selfFor(playerId));
+          }
+        }
         talkedToAnyone = true;
       }
 

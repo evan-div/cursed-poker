@@ -74,6 +74,7 @@ export class SeatedCamera {
   #candidate: GazeTarget = { kind: 'AWAY' };
   #candidateSince = 0;
   #forward = new Vector3();
+  #shake = { yaw: 0, pitch: 0, roll: 0 };
 
   #dragging = false;
   #locked = false;
@@ -147,6 +148,24 @@ export class SeatedCamera {
   setPeekLean(exposure: number): void {
     this.#peekLean = clamp(exposure, 0, 1);
     this.#applyLean();
+  }
+
+  /**
+   * Your body getting in the way of your eyes: tremor, breath and pulse.
+   *
+   * Added to what the camera *renders* and to nothing else. Where the player is
+   * looking — the thing reported to the table — is still resolved from where
+   * they meant to look, because a gaze resolved from a shaking camera would
+   * flicker between neighbours at the rate the player's hands shook, and that
+   * flicker would be a far better read of their heart than the quantised tell
+   * the server deliberately broadcasts instead. See `feel/pulse.ts`.
+   */
+  setShake(shake: { yaw: number; pitch: number; roll: number }): void {
+    this.#shake = {
+      yaw: Number.isFinite(shake.yaw) ? shake.yaw : 0,
+      pitch: Number.isFinite(shake.pitch) ? shake.pitch : 0,
+      roll: Number.isFinite(shake.roll) ? shake.roll : 0,
+    };
   }
 
   /** Aims the head directly, without easing. Dragging is the way in for players. */
@@ -397,7 +416,10 @@ export class SeatedCamera {
    * everything carries no information; a head that settles carries all of it.
    */
   #updateGaze(now: number): void {
-    this.camera.getWorldDirection(this.#forward);
+    // From the intended look, not the rendered one. See `setShake`.
+    const heading = this.#baseYaw + this.#yaw;
+    const level = Math.cos(this.#pitch);
+    this.#forward.set(-Math.sin(heading) * level, Math.sin(this.#pitch), -Math.cos(heading) * level);
     const target = resolveGaze(this.eye, this.#forward, this.#seatIndex, this.#seats);
 
     if (!gazeEquals(target, this.#candidate)) {
@@ -416,8 +438,8 @@ export class SeatedCamera {
     // YXZ keeps yaw about the world axis and pitch about the head's own, which
     // is what a neck does. The default XYZ order rolls the horizon.
     this.camera.rotation.order = 'YXZ';
-    this.camera.rotation.y = this.#baseYaw + this.#yaw;
-    this.camera.rotation.x = this.#pitch;
-    this.camera.rotation.z = 0;
+    this.camera.rotation.y = this.#baseYaw + this.#yaw + this.#shake.yaw;
+    this.camera.rotation.x = this.#pitch + this.#shake.pitch;
+    this.camera.rotation.z = this.#shake.roll;
   }
 }

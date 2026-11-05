@@ -8,6 +8,7 @@ import {
   type PlayerView,
   type PresenceFrame,
   type SeatView,
+  type SelfFrame,
   type SelfView,
 } from '@cursed/shared';
 import { COMPOSED, dreadLevel } from '@cursed/shared';
@@ -24,10 +25,17 @@ import { projectSelfStress, projectTells } from './stress.js';
  * SOMETHING A CLIENT RECEIVES. If a second one ever appears, the guarantee this
  * project rests on becomes two guarantees, and then none.
  *
- * There are two exits, because the protocol carries two rates of information:
+ * There are three exits, because the protocol carries three kinds of information:
  *
  *   - `projectForViewer` — the situation, per viewer, on every change.
  *   - `presenceFrame` — bodies, identical for everybody, on a fixed tick.
+ *   - `selfFrame` — your own heart, to you alone, on a slower tick.
+ *
+ * The third arrived in Phase 6 and was argued for rather than slipped in: stress
+ * decays between events, and the view only moves when the match does, so a
+ * heart carried only on the view would freeze between bets. It is the exact
+ * mirror of `presenceFrame` — that one has no hidden half and goes to everybody;
+ * this one is *all* hidden half and goes to one person.
  *
  * The second one is a broadcast precisely *because* it has no viewer-specific
  * half. Everything in a presence frame is something a person sitting at this
@@ -99,6 +107,22 @@ export function presenceFrame(match: MatchState, now: number): PresenceFrame {
     ),
     dealer: projectDealer(match.dealer, now),
     dread: roomDread(match, now),
+  };
+}
+
+/**
+ * One player's own body, for that player only.
+ *
+ * Takes a viewer, like `projectForViewer`, and for the same reason: what it
+ * carries belongs to exactly one person. `game-server.ts` sends each connection
+ * the frame for its own player and no other, and `tests/integration.test.ts`
+ * checks that nobody ever receives somebody else's.
+ */
+export function selfFrame(match: MatchState, viewerId: string, now: number): SelfFrame {
+  const viewer = findPlayer(match, viewerId);
+  return {
+    serverTime: now,
+    stress: projectSelfStress(match.stress, viewer?.seatIndex ?? null, now),
   };
 }
 

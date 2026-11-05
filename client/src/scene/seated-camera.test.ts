@@ -170,3 +170,55 @@ describe('leaning in', () => {
     expect(camera.lean).toBe(0);
   });
 });
+
+describe('shaking', () => {
+  it('moves what you see', () => {
+    const camera = new SeatedCamera(16 / 9);
+    camera.sitAt(2);
+    camera.update(1 / 60, 1_000);
+    const still = camera.camera.rotation.clone();
+    camera.setShake({ yaw: 0.01, pitch: -0.008, roll: 0.004 });
+    camera.update(1 / 60, 1_016);
+    expect(camera.camera.rotation.y).toBeCloseTo(still.y + 0.01, 6);
+    expect(camera.camera.rotation.x).toBeCloseTo(still.x - 0.008, 6);
+    expect(camera.camera.rotation.z).toBeCloseTo(0.004, 6);
+  });
+
+  it('never changes where the table is told you are looking', () => {
+    // Gaze is replicated. Resolved from a shaking camera, it would flicker
+    // between neighbours at the rate your hands shook — a transcript of your
+    // heart, sent to everybody, at far better resolution than the tell the
+    // server deliberately quantises. So it is resolved from where you meant to
+    // look, and a violently shaking head reports exactly what a still one does.
+    const steady = new SeatedCamera(16 / 9);
+    const shaking = new SeatedCamera(16 / 9);
+    const reports = { steady: [] as string[], shaking: [] as string[] };
+    for (const [camera, log] of [
+      [steady, reports.steady],
+      [shaking, reports.shaking],
+    ] as const) {
+      camera.sitAt(0);
+      camera.setSeats([0, 1, 2, 3, 4, 5]);
+      camera.onGazeChanged = (target) => log.push(JSON.stringify(target));
+    }
+
+    let seed = 12_345;
+    const noise = () => {
+      seed = (seed * 1_664_525 + 1_013_904_223) >>> 0;
+      return (seed / 2 ** 32 - 0.5) * 0.4;
+    };
+    // A slow sweep across the whole table, with a shake far beyond anything
+    // the body model would ever produce.
+    for (let i = 0; i < 900; i++) {
+      const yaw = -1 + (2 * i) / 900;
+      const now = 1_000 + i * 16;
+      for (const camera of [steady, shaking]) camera.lookAt(yaw, -0.2);
+      shaking.setShake({ yaw: noise(), pitch: noise(), roll: noise() });
+      steady.update(1 / 60, now);
+      shaking.update(1 / 60, now);
+    }
+
+    expect(reports.steady.length).toBeGreaterThan(2);
+    expect(reports.shaking).toEqual(reports.steady);
+  });
+});

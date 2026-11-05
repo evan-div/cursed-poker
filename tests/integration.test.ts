@@ -9,7 +9,10 @@ import type {
   ClientView,
   PlayerAction,
   PresenceFrame,
+  SelfFrame,
 } from '@cursed/shared';
+import { STRESS } from '@cursed/shared';
+import { applyStressEvent } from '../server/src/match/stress.js';
 import { GameServer } from '../server/src/net/game-server.js';
 import { SocketIoTransport } from '../server/src/net/socketio-transport.js';
 
@@ -40,6 +43,8 @@ interface TestClient {
   /** Own hole cards per hand number, for the cross-client privacy audit. */
   holeByHand: Map<number, Card[]>;
   presence: PresenceFrame[];
+  /** Frames on the owner-only `self` channel: this client's own heart. */
+  self: SelfFrame[];
   acting: boolean;
 }
 
@@ -77,6 +82,7 @@ async function connect(name: string): Promise<TestClient> {
     latest: null,
     holeByHand: new Map(),
     presence: [],
+    self: [],
     acting: false,
   };
 
@@ -89,6 +95,7 @@ async function connect(name: string): Promise<TestClient> {
   });
 
   socket.on('presence', (frame: PresenceFrame) => client.presence.push(frame));
+  socket.on('self', (frame: SelfFrame) => client.self.push(frame));
 
   clients.push(client);
   return client;
@@ -423,6 +430,43 @@ describe('bodies over the wire', () => {
     // And it says the same thing to everybody: presence has no hidden half.
     const seen = group.map((c) => c.presence.length);
     expect(seen.every((count) => count > 0)).toBe(true);
+  }, 20_000);
+
+  it('tells each player their own heart, and nobody else’s', async () => {
+    const group = await openLobby(4);
+    await emit(group[0]!.socket, 'lobby:start', {});
+    await waitFor(() => group.every((c) => c.latest?.hand !== null), 5_000, 'the first hand');
+
+    // Frighten one player, hard, straight through the model.
+    const frightened = group[2]!;
+    const seat = frightened.latest!.you.seatIndex!;
+    const room = gameServer.rooms.get(frightened.latest!.room.code)!;
+    for (let i = 0; i < 12; i++) {
+      applyStressEvent(room.match.state.stress, seat, 'SHOVED', Date.now());
+    }
+    for (const c of group) c.self.length = 0;
+
+    await waitFor(
+      () => group.every((c) => c.self.length > 0),
+      5_000,
+      'everybody to hear from their own heart',
+    );
+
+    // The frightened player feels it. Everybody else, on the same tick, does
+    // not — the channel is addressed by player, and the number never leaves.
+    const latest = (c: (typeof group)[number]) => c.self[c.self.length - 1]!.stress.heartRate;
+    expect(latest(frightened)).toBeGreaterThan(STRESS.maxBpm - 10);
+    for (const other of group.filter((c) => c !== frightened)) {
+      expect(latest(other), other.name).toBeLessThan(latest(frightened) - 20);
+    }
+
+    // The frame is exactly a time and a heart. No seat and no player id: it
+    // is addressed by the socket it arrives on, so there is nothing to put in
+    // it that could be mis-sent somewhere else and still make sense.
+    for (const frame of frightened.self) {
+      expect(Object.keys(frame).sort()).toEqual(['serverTime', 'stress']);
+      expect(Object.keys(frame.stress).sort()).toEqual(['heartRate', 'stress']);
+    }
   }, 20_000);
 
   it('will not let a body report use up the budget for a poker action', async () => {

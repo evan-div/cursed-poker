@@ -98,6 +98,41 @@ describe('lifting a card', () => {
     expect(shaking.exposure).toBe(1);
   });
 
+  it('never moves a held card on its own when the hands start shaking', () => {
+    // Stress changes every frame. If that rescaled a card being held, the card
+    // would creep with the player's heart rate — and exposure is replicated,
+    // so the whole table would be watching a heart monitor.
+    const peek = new PeekGesture({ travelPixels: 100 });
+    peek.begin();
+    peek.move(50);
+    const held = peek.exposure;
+    for (const shake of [0.2, 0.6, 1, 0.3, 0]) {
+      peek.setUnsteadiness(shake);
+      expect(peek.exposure).toBe(held);
+    }
+
+    // And raised cards stay raised.
+    peek.move(10_000);
+    const lift = peek.lift;
+    peek.setUnsteadiness(0.8);
+    expect(peek.lift).toBe(lift);
+    expect(peek.exposure).toBe(1);
+  });
+
+  it('makes the next movement harder once they do', () => {
+    const peek = new PeekGesture({ travelPixels: 100 });
+    peek.begin();
+    peek.move(20);
+    const before = peek.exposure;
+    peek.move(20);
+    const steadyStep = peek.exposure - before;
+
+    peek.setUnsteadiness(1);
+    const mid = peek.exposure;
+    peek.move(20);
+    expect(peek.exposure - mid).toBeLessThan(steadyStep);
+  });
+
   it('survives nonsense input without leaving 0..1', () => {
     const peek = new PeekGesture({ travelPixels: 100 });
     peek.begin();

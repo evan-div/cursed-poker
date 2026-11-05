@@ -4,6 +4,7 @@ import type {
   ClientView,
   MatchEvent,
   PresenceFrame,
+  SelfFrame,
   SessionGrant,
 } from '@cursed/shared';
 
@@ -26,6 +27,8 @@ export class GameConnection {
   onEvents: (events: MatchEvent[]) => void = () => {};
   /** The table's bodies, on the server's tick. Public state, so no secrets here. */
   onPresence: (frame: PresenceFrame) => void = () => {};
+  /** Your own heart, and nobody else's. Sent to this socket alone. */
+  onSelf: (frame: SelfFrame) => void = () => {};
   onError: (error: { code: string; message: string }) => void = () => {};
   onStatus: (connected: boolean) => void = () => {};
 
@@ -34,6 +37,7 @@ export class GameConnection {
     this.socket.on('view', (view: ClientView) => this.onView(view));
     this.socket.on('events', (events: MatchEvent[]) => this.onEvents(events));
     this.socket.on('presence', (frame: PresenceFrame) => this.onPresence(frame));
+    this.socket.on('self', (frame: SelfFrame) => this.onSelf(frame));
     this.socket.on('error', (error: { code: string; message: string }) => this.onError(error));
     this.socket.on('connect', () => {
       this.onStatus(true);

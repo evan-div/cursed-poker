@@ -66,6 +66,31 @@ input[type="range"] { padding: 0; accent-color: var(--brass); }
 /* The overlay is inert except where it is not, so dragging looks around. */
 .hud, .nameplates { position: absolute; inset: 0; pointer-events: none; }
 
+/*
+ * Tunnel vision. Above the table, below everything that is poker — see
+ * `ui/tunnel.ts`. Oversized so it still covers the screen when it shrinks in,
+ * and the middle is always clear: you can be too frightened to watch the room,
+ * never too frightened to see the board.
+ */
+.tunnel {
+  position: absolute;
+  inset: -12%;
+  pointer-events: none;
+  will-change: transform;
+  /*
+   * Sized to the layer's half-extents rather than its far corner, so the dark
+   * rim lands on the screen's edges instead of in the oversize margin where
+   * nobody can see it. The clear middle is about half the screen across.
+   */
+  background: radial-gradient(
+    ellipse 50% 50% at 50% 52%,
+    transparent 38%,
+    rgba(10, 3, 2, 0.62) 58%,
+    rgba(6, 1, 1, 0.92) 76%,
+    rgba(3, 0, 0, 0.98) 92%
+  );
+}
+
 /* --- nameplates ---------------------------------------------------------- */
 
 .plate {

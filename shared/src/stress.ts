@@ -123,6 +123,14 @@ export const STRESS = {
    * plenty to see somebody shaking and nowhere near enough to decode them.
    */
   tellSteps: 8,
+  /**
+   * How often a player is told about their own body, in hertz.
+   *
+   * A heart rate does not need twelve updates a second, and the client eases
+   * between them anyway. Four is plenty to feel the Dealer's head turn toward
+   * you within a beat or so.
+   */
+  selfHz: 4,
 } as const;
 
 /** How visibly somebody is sweating. Three words, because eyes are not meters. */
@@ -162,6 +170,27 @@ export interface SelfStress {
 
 export const COMPOSED: SelfStress = { heartRate: STRESS.restingBpm, stress: 0 };
 
+/**
+ * Your own body, on its own private tick.
+ *
+ * `you.stress` rides the view, and the view is only pushed when the *match*
+ * changes. Stress does not wait for the match: a spike decays over the next ten
+ * seconds whether anybody acts or not, and the Dealer turning his head toward
+ * you raises your floor without a single chip moving. A heart that only updated
+ * on the next bet would sit pinned at the spike while you thought, then lurch
+ * down the moment somebody finally called — and would never once react to being
+ * stared at.
+ *
+ * So it gets a channel of its own: per player, owner-only, at a few hertz. The
+ * same projection rules as everything else, and the opposite of `presence` in
+ * the one way that matters — presence is identical for everybody because it has
+ * no hidden half, and this is *nothing but* a hidden half.
+ */
+export interface SelfFrame {
+  serverTime: number;
+  stress: SelfStress;
+}
+
 /** Rounds a tell to the resolution everybody receives it at. */
 export function quantiseTell(value: number): number {
   const clamped = Math.min(Math.max(value, 0), 1);
@@ -175,20 +204,36 @@ export function heartRateFor(stress: number): number {
 }
 
 /**
- * The tells a stress level produces.
+ * The shape of the three tells, before anything is rounded.
  *
  * The three do not arrive together, which is most of what makes them readable
  * as a progression rather than as one bar drawn three ways. Breathing goes
  * first and goes early — it is the one thing a calm-looking player is still
  * doing. Hands start shaking later and harder. Sweat is last and coarsest.
+ *
+ * Shared by two consumers on purpose. The table sees these quantised, through
+ * `tellsFor`; the player whose body it is feels them at full resolution, in
+ * their own camera and their own hands. One curve for both means that what you
+ * feel and what everybody else sees can never drift apart — if your hands are
+ * shaking on your screen, they are shaking on theirs.
  */
-export function tellsFor(stress: number): SeatTells {
+export function tellCurves(stress: number): { tremor: number; breathing: number; sweat: number } {
   const s = Math.min(Math.max(stress, 0), 1);
   return {
     // Shaking starts late, then climbs fast.
-    tremor: quantiseTell(s < 0.35 ? 0 : (s - 0.35) / 0.65),
+    tremor: s < 0.35 ? 0 : (s - 0.35) / 0.65,
     // Breathing is already moving while somebody still looks composed.
-    breathing: quantiseTell(Math.min(1, s * 1.35)),
-    sweat: s > 0.78 ? 'SOAKED' : s > 0.5 ? 'DAMP' : 'DRY',
+    breathing: Math.min(1, s * 1.35),
+    sweat: s,
+  };
+}
+
+/** The tells a stress level produces, at the resolution the table receives them. */
+export function tellsFor(stress: number): SeatTells {
+  const curves = tellCurves(stress);
+  return {
+    tremor: quantiseTell(curves.tremor),
+    breathing: quantiseTell(curves.breathing),
+    sweat: curves.sweat > 0.78 ? 'SOAKED' : curves.sweat > 0.5 ? 'DAMP' : 'DRY',
   };
 }

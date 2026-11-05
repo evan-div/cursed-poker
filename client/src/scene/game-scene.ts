@@ -8,7 +8,7 @@ import {
   Vector3,
   WebGLRenderer,
 } from 'three';
-import type { ClientView, GazeTarget, MatchEvent, PresenceFrame } from '@cursed/shared';
+import type { ClientView, GazeTarget, MatchEvent, PresenceFrame, SelfFrame } from '@cursed/shared';
 import { buildRoom, type Room } from './table.js';
 import { cuesFor, dealerRiseCue } from '../audio/cues.js';
 import { SILENT_ROOM, startRoomAudio, type RoomAudio } from '../audio/engine.js';
@@ -20,6 +20,7 @@ import { ChipRenderer } from './chips.js';
 import { ATTENTION_WEIGHT } from './attention.js';
 import { gazePoint } from './gaze.js';
 import { CardPeekController } from '../interaction/card-peek-controller.js';
+import { Pulse, type Felt } from '../feel/pulse.js';
 import { POT_POSITION, RADIUS, seatPoint } from './layout.js';
 
 /** Everything the scene needs to report outward. Wired up in `main.ts`. */
@@ -88,6 +89,12 @@ export class GameScene {
   #dealerPosture: PresenceFrame['dealer']['posture'] = 'STILL';
   #cards = new CardRenderer();
   #chips = new ChipRenderer();
+  /** Your own body, felt from the inside. See `feel/pulse.ts`. */
+  #pulse = new Pulse({ reducedMotion: prefersReducedMotion() });
+  #motionQuery: MediaQueryList | null = null;
+  #onMotionChange = (event: MediaQueryListEvent) => {
+    this.#pulse.reducedMotion = event.matches;
+  };
 
   constructor(canvas: HTMLCanvasElement, hooks: GameSceneHooks) {
     this.#canvas = canvas;
@@ -138,6 +145,11 @@ export class GameScene {
     this.seated.onPointerConsumed = (dx, dy) => this.peek.pointerMoved(dx, dy);
     this.seated.attach(canvas);
     this.peek.attach(canvas);
+
+    // A player who has asked their OS for less motion keeps the sound and the
+    // closing edges, and loses the shake. Followed live, not read once.
+    this.#motionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
+    this.#motionQuery?.addEventListener?.('change', this.#onMotionChange);
 
     // Exposed so the performance budget can be read from a real browser.
     (window as unknown as { __sceneStats?: () => unknown }).__sceneStats = () => this.stats();
@@ -194,6 +206,14 @@ export class GameScene {
         running: this.#audio.running,
       });
 
+      // Your own body, read and forced. `__feel(0.9)` shows what panic looks
+      // like without spending a match getting there; `__feel(null)` hands it
+      // back to the server; `__feel()` just reads it.
+      (window as unknown as { __feel?: unknown }).__feel = (stress?: number | null) => {
+        if (stress !== undefined) this.#pulse.force(stress);
+        return { ...this.#pulse.felt, reported: this.#pulse.reported, gaze: this.seated.gaze };
+      };
+
       (window as unknown as { __freeLook?: unknown }).__freeLook = (
         x: number,
         y: number,
@@ -223,6 +243,7 @@ export class GameScene {
    */
   apply(view: ClientView): void {
     this.#bigBlind = view.level?.bigBlind ?? this.#bigBlind;
+    this.#pulse.setStress(view.you.stress, view.serverTime);
     if (this.#seatIndex !== view.you.seatIndex) {
       this.#seatIndex = view.you.seatIndex;
       this.seated.sitAt(view.you.seatIndex);
@@ -243,6 +264,21 @@ export class GameScene {
     this.#cards.apply(view);
     this.#chips.apply(view);
     this.#biasAttention(view);
+  }
+
+  /**
+   * Your own heart, on its private tick.
+   *
+   * The same reading also rides every view; whichever is newer wins, so the two
+   * channels can arrive in any order without the heart stepping backwards.
+   */
+  applySelf(frame: SelfFrame): void {
+    this.#pulse.setStress(frame.stress, frame.serverTime);
+  }
+
+  /** What the player's body is doing to them this frame. */
+  get felt(): Felt {
+    return this.#pulse.felt;
   }
 
   /** Everybody else's bodies, straight from the server's broadcast. */
@@ -377,6 +413,7 @@ export class GameScene {
   dispose(): void {
     this.stop();
     this.#resizeObserver?.disconnect();
+    this.#motionQuery?.removeEventListener?.('change', this.#onMotionChange);
     this.peek.detach();
     this.seated.detach();
     this.renderer.dispose();
@@ -395,6 +432,17 @@ export class GameScene {
   #frame(now: number): void {
     const delta = Math.min((now - this.#lastFrame) / 1000, 0.1);
     this.#lastFrame = now;
+
+    // The body first, because everything after it is seen through it.
+    for (const sound of this.#pulse.update(delta)) {
+      if (sound.kind === 'HEARTBEAT') this.#audio.heartbeat(sound.gain, sound.gap);
+      else this.#audio.breath(sound.gain);
+    }
+    const felt = this.#pulse.felt;
+    // Shaking hands make the next movement of a card cost more. They never
+    // move a card that is being held — see `PeekGesture.setUnsteadiness`.
+    this.peek.gesture.setUnsteadiness(felt.unsteadiness);
+    this.seated.setShake(felt.shake);
 
     this.peek.update(delta);
     this.#cards.updatePoses();
@@ -428,4 +476,8 @@ export class GameScene {
     this.renderer.setSize(width, height, false);
     this.seated.setAspect(width / height);
   }
+}
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }

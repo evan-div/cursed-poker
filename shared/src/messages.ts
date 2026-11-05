@@ -10,6 +10,7 @@
  * boundary — the client is free to believe the server.
  */
 import { z } from 'zod';
+import type { SelfFrame } from './stress.js';
 import type { ClientView } from './view.js';
 import type { HandEvent } from './hand-events.js';
 import type { PresenceFrame } from './presence.js';
@@ -223,6 +224,14 @@ export interface ServerMessages {
    * a game where nothing had happened. Every field in it is public.
    */
   presence: (frame: PresenceFrame) => void;
+  /**
+   * Your own body, and nobody else's.
+   *
+   * The private counterpart to `presence`: sent per connection, never
+   * broadcast, carrying only the receiving player's own heart. See `SelfFrame`
+   * for why it cannot simply ride the view.
+   */
+  self: (frame: SelfFrame) => void;
   error: (error: { code: ErrorCode; message: string }) => void;
 }
 

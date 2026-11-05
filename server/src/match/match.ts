@@ -13,6 +13,7 @@ import {
   type PlayerAction,
   type PresenceFrame,
   type PresenceInput,
+  type SelfFrame,
 } from '@cursed/shared';
 import {
   CryptoRandomSource,
@@ -51,7 +52,7 @@ import {
   reportPresence,
   resetForHand,
 } from './presence.js';
-import { presenceFrame, projectForViewer, roomDread } from './projection.js';
+import { presenceFrame, projectForViewer, roomDread, selfFrame } from './projection.js';
 
 /**
  * The outer state machine: one lobby, from empty room to last player standing.
@@ -257,6 +258,11 @@ export class Match {
   /** The table's bodies. Public to everyone, so there is no viewer argument. */
   presenceFor(): PresenceFrame {
     return presenceFrame(this.state, this.#clock.now());
+  }
+
+  /** One player's own heart. Private, so there is a viewer argument. */
+  selfFor(playerId: string): SelfFrame {
+    return selfFrame(this.state, playerId, this.#clock.now());
   }
 
   dispose(): void {

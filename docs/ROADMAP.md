@@ -220,11 +220,27 @@ Still open in this phase:
 
 ## Phase 6 — Heart rate and tells
 
-- [ ] Server-side stress model with named stress events
-- [ ] Feed tremor into `PeekGesture`'s `unsteadiness`, which is wired and inert
-- [ ] First-person feedback: heartbeat, breathing, tremor, camera instability,
-      tunnel vision, unsteady peeking
-- [ ] Server-derived third-person tell state (`tremor`, `breathing`, `sweat`, …)
+- [x] Server-side stress model with named stress events — spikes that decay,
+      a floor that does not, and **no card anywhere in its inputs**
+      (`stress-boundary.test.ts` deals two tables different decks under one
+      script and requires every heart and tell to match while a hand is live)
+- [x] Server-derived third-person tell state (`tremor`, `breathing`, `sweat`),
+      quantised to eight steps before it is broadcast
+- [x] A third server channel, `self`: your own heart, at 4 Hz, to your socket
+      alone. Views only move when poker does; a heart has to settle while you
+      think and rise when the Dealer looks at you
+- [x] First-person feedback: an audible heartbeat (lub-dub, inside your head
+      rather than in the room), breathing you can see and, past a point, hear;
+      head tremor; tunnel vision that throbs with the pulse
+- [x] Tremor fed into `PeekGesture`'s `unsteadiness` — the next pull costs
+      more, a card already held never moves on its own
+- [x] Camera shake is applied to what you *see*, never to where the table is
+      told you are *looking*: gaze resolved from a shaking camera would flicker
+      at the rate of your tremor and broadcast it at full resolution
+- [x] Tunnel vision sits under the nameplates and HUD: fear may darken the
+      room, never a stack, an action or a button
+- [x] `prefers-reduced-motion` removes the shake and the throb, keeps the
+      sound and the closing edges
 - [ ] Avatar tell visualization
 - [ ] Telemetry/replay harness so tuning is data-driven
 

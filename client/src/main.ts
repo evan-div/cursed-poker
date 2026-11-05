@@ -15,6 +15,7 @@ import { el } from './ui/dom.js';
 import { renderLanding, renderLobby, type LobbyHandlers } from './ui/lobby.js';
 import { actionForKey, renderHud } from './ui/hud.js';
 import { Nameplates } from './ui/nameplates.js';
+import { Tunnel } from './ui/tunnel.js';
 
 /**
  * Client bootstrap.
@@ -41,6 +42,7 @@ let pendingAction = false;
 
 let scene: GameScene | null = null;
 let nameplates: Nameplates | null = null;
+let tunnel: Tunnel | null = null;
 let canvas: HTMLCanvasElement | null = null;
 let pointerLocked = false;
 /** The hand we have already asked to look at, so a re-check is not re-asked. */
@@ -107,6 +109,9 @@ connection.onEvents = (events: MatchEvent[]) => {
  * turned their head would be absurd.
  */
 connection.onPresence = (frame: PresenceFrame) => scene?.applyPresence(frame);
+
+/** Your own heart. Same reasoning: straight to the scene, never the DOM. */
+connection.onSelf = (frame) => scene?.applySelf(frame);
 
 connection.onError = (error) => setBanner(error.message, 'error');
 
@@ -218,12 +223,17 @@ function renderTable(current: ClientView): void {
       },
       onGaze: (target: GazeTarget) => reporter.setGaze(target),
     });
+    // Order is the stacking: the room, then fear, then everything that is
+    // poker. Tunnel vision may darken the table; it may never cover a name, a
+    // stack or a button.
+    tunnel = new Tunnel();
     nameplates = new Nameplates();
-    stage.append(nameplates.root);
+    stage.append(tunnel.root, nameplates.root);
 
     scene.onFrame = () => {
       if (!scene || !nameplates || !canvas) return;
       nameplates.project(scene.seated.camera, canvas.clientWidth, canvas.clientHeight);
+      tunnel?.set(scene.felt.tunnel);
     };
 
     // Pointer lock is offered, never imposed: clicking the table takes it,
@@ -266,6 +276,7 @@ function teardownScene(): void {
   scene.dispose();
   scene = null;
   nameplates = null;
+  tunnel = null;
   canvas = null;
   pointerLocked = false;
   handlingChips(false);

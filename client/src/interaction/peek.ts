@@ -30,10 +30,10 @@ export interface PeekOptions {
   /**
    * Extra travel needed per unit of unsteadiness, 0..1.
    *
-   * Phase 6 feeds a stressed player's tremor in here: holding a card still
-   * enough to read is harder when your hands are shaking. It does nothing yet,
-   * and when it does it changes no odds — a shaking player sees the same card,
-   * they just work harder to see it, in front of everybody.
+   * A stressed player's tremor is fed in here every frame: holding a card
+   * still enough to read is harder when your hands are shaking. It changes no
+   * odds — a shaking player sees the same card, they just work harder to see
+   * it, in front of everybody.
    */
   unsteadiness?: number;
 }
@@ -85,8 +85,25 @@ export class PeekGesture {
     return this.#exposure >= PEEK.rankVisibleAt;
   }
 
+  get unsteadiness(): number {
+    return this.#unsteadiness;
+  }
+
+  /**
+   * How badly the player's hands are shaking, 0..1.
+   *
+   * Changes what the *next* movement is worth, never where the cards already
+   * are. Stress moves every frame, and if it rescaled a card being held the
+   * card would creep up and down on its own — and since exposure is
+   * replicated, that creep would be the player's heart rate, broadcast at frame
+   * rate to everybody at the table. So the pull is re-expressed in the new
+   * scale and the cards stay exactly where the player put them.
+   */
   setUnsteadiness(value: number): void {
-    this.#unsteadiness = clamp01(value);
+    const next = clamp01(value);
+    if (next === this.#unsteadiness) return;
+    this.#unsteadiness = next;
+    if (this.#holding) this.#pulled = this.#pullFor(this.#exposure, this.#lift);
   }
 
   /**

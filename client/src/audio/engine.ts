@@ -32,6 +32,15 @@ const MIX = {
   refDistance: 0.7,
   /** How fast it falls off past that. */
   rolloff: 1.4,
+  /**
+   * Your own body, which is not in the room.
+   *
+   * Unpanned and unattenuated: a heartbeat does not come from a direction. And
+   * mixed under the table, never over it — a chip pushed in across the felt has
+   * to stay audible through it, because that sound is information and this one
+   * is only fear.
+   */
+  body: 0.5,
 } as const;
 
 /** Sample rate of the synthesised buffers. Cheap, and nothing here is music. */
@@ -46,6 +55,10 @@ export interface RoomAudio {
   play(cue: Cue): void;
   /** How bad the room has got, 0..1. Drives the tone under everything. */
   setDread(level: number): void;
+  /** One beat of your own heart: lub, and `gap` seconds later, dub. */
+  heartbeat(gain: number, gap: number): void;
+  /** One breath in, heard from the inside. */
+  breath(gain: number): void;
   close(): Promise<void>;
 }
 
@@ -60,6 +73,8 @@ export const SILENT_ROOM: RoomAudio = {
   follow() {},
   play() {},
   setDread() {},
+  heartbeat() {},
+  breath() {},
   async close() {},
 };
 
@@ -100,6 +115,24 @@ export function startRoomAudio(): RoomAudio {
   humFilter.frequency.value = 320;
   hum.connect(humFilter).connect(tone);
   hum.start();
+
+  const body = context.createGain();
+  body.gain.value = MIX.body;
+  body.connect(master);
+  const lub = render(context, thump(0.32, 52, 0.075));
+  const dub = render(context, thump(0.26, 61, 0.06));
+  const inhale = render(context, breathIn);
+
+  /** Plays a buffer straight into the head, at `when` on the audio clock. */
+  const inside = (buffer: AudioBuffer, gain: number, when: number) => {
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    const level = context.createGain();
+    level.gain.value = gain;
+    source.connect(level).connect(body);
+    source.start(when);
+    source.onended = () => source.disconnect();
+  };
 
   return {
     get running() {
@@ -168,6 +201,18 @@ export function startRoomAudio(): RoomAudio {
       humFilter.frequency.setTargetAtTime(blend(320, 140, level), context.currentTime, 3);
     },
 
+    heartbeat(gain: number, gap: number): void {
+      if (context.state !== 'running' || !(gain > 0)) return;
+      const now = context.currentTime;
+      inside(lub, gain, now);
+      inside(dub, gain * 0.7, now + Math.max(0.08, gap));
+    },
+
+    breath(gain: number): void {
+      if (context.state !== 'running' || !(gain > 0)) return;
+      inside(inhale, gain, context.currentTime);
+    },
+
     async close(): Promise<void> {
       hum.stop();
       await context.close();
@@ -233,6 +278,48 @@ function groan(seconds: number, frequency: number): Recipe {
     },
   };
 }
+
+/**
+ * A heart sound: felt more than heard.
+ *
+ * A low sine that sags in pitch as it dies, with a little dark noise for the
+ * knock of it. Well under where anything at the table sits, so it presses on
+ * the mix rather than competing with it.
+ */
+function thump(seconds: number, frequency: number, decay: number): Recipe {
+  return {
+    seconds,
+    fill: () => {
+      let low = 0;
+      let phase = 0;
+      return (t: number) => {
+        phase += (2 * Math.PI * frequency * (1 - 0.35 * Math.min(t / decay, 1))) / RATE;
+        low += (Math.random() * 2 - 1 - low) * 0.04;
+        const shape = Math.min(t / 0.004, 1) * Math.exp(-t / decay);
+        return (Math.sin(phase) + low * 1.5) * shape;
+      };
+    },
+  };
+}
+
+/** Air drawn in through a tight throat. Slow in, quicker out. */
+const breathIn: Recipe = {
+  seconds: 1.1,
+  fill: () => {
+    let low = 0;
+    let lower = 0;
+    return (t: number) => {
+      const white = Math.random() * 2 - 1;
+      // Two poles, differenced: a crude band-pass that keeps the hiss of it and
+      // loses both the rumble and the fizz.
+      low += (white - low) * 0.35;
+      lower += (low - lower) * 0.06;
+      const band = low - lower;
+      const shape = Math.sin(Math.PI * Math.min(t / 1.1, 1)) ** 2;
+      return band * shape * 1.6;
+    };
+  },
+};
 
 const roomTone: Recipe = {
   // Long enough that the loop point is not a rhythm anybody could learn.
