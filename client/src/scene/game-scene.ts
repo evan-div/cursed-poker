@@ -8,7 +8,14 @@ import {
   Vector3,
   WebGLRenderer,
 } from 'three';
-import type { ClientView, GazeTarget, MatchEvent, PresenceFrame, SelfFrame } from '@cursed/shared';
+import type {
+  ClientView,
+  GazeTarget,
+  MatchEvent,
+  PresenceFrame,
+  SeatTells,
+  SelfFrame,
+} from '@cursed/shared';
 import { buildRoom, type Room } from './table.js';
 import { cuesFor, dealerRiseCue } from '../audio/cues.js';
 import { SILENT_ROOM, startRoomAudio, type RoomAudio } from '../audio/engine.js';
@@ -21,6 +28,7 @@ import { ATTENTION_WEIGHT } from './attention.js';
 import { gazePoint } from './gaze.js';
 import { CardPeekController } from '../interaction/card-peek-controller.js';
 import { Pulse, type Felt } from '../feel/pulse.js';
+import { TableTells } from './tells.js';
 import { POT_POSITION, RADIUS, seatPoint } from './layout.js';
 
 /** Everything the scene needs to report outward. Wired up in `main.ts`. */
@@ -89,6 +97,8 @@ export class GameScene {
   #dealerPosture: PresenceFrame['dealer']['posture'] = 'STILL';
   #cards = new CardRenderer();
   #chips = new ChipRenderer();
+  /** Everybody's tells, eased and animated. The avatars and the cards share it. */
+  #tells = new TableTells();
   /** Your own body, felt from the inside. See `feel/pulse.ts`. */
   #pulse = new Pulse({ reducedMotion: prefersReducedMotion() });
   #motionQuery: MediaQueryList | null = null;
@@ -197,8 +207,21 @@ export class GameScene {
           gaze: seat.gaze,
           stillMs: seat.stillMs,
           present: seat.present,
+          tells: seat.tells,
         })),
       });
+
+      // Pins a seat's tells for a screenshot: `__tells(2, { tremor: 1,
+      // breathing: 1, sweat: 'SOAKED' })`, `__tells(2, null)` to let go, and
+      // `__tells(2)` to read what that seat is showing right now.
+      (window as unknown as { __tells?: unknown }).__tells = (
+        seat: number,
+        tells?: SeatTells | null,
+      ) => {
+        if (tells !== undefined) this.#tells.force(seat, tells);
+        const m = this.#tells.motion(seat);
+        return { tremor: m.tremor, breathing: m.breathing, sweat: m.sweat };
+      };
 
       // Whether the room is actually making a noise. Web Audio cannot run
       // under a test, so this is how `scripts/audio-check.mjs` finds out.
@@ -285,6 +308,9 @@ export class GameScene {
   applyPresence(frame: PresenceFrame): void {
     this.#lastPresence = frame;
     this.#cards.applyPresence(frame);
+    // Every seat, the local one included: your own hands shake on your screen
+    // exactly as they shake on everybody else's, from the same broadcast.
+    this.#tells.applyPresence(frame);
     // The Dealer is a body on this channel too, and nothing about him is
     // decided here — see `dealer.ts`. The room's dread rides along with him
     // because lighting that differed between two players would make them
@@ -445,13 +471,17 @@ export class GameScene {
     this.seated.setShake(felt.shake);
 
     this.peek.update(delta);
-    this.#cards.updatePoses();
+    this.#tells.update(delta);
+    this.#cards.updatePoses(this.#tells);
     this.#dealer.update(delta);
     this.#room.update(delta);
     // The listener goes wherever the player's head goes, so a chip pushed in
     // behind you is behind you.
     this.#audio.follow(this.seated.camera);
-    for (const avatar of this.#avatars.values()) avatar.update(delta);
+    for (const avatar of this.#avatars.values()) {
+      avatar.setTells(this.#tells.motion(avatar.seatIndex));
+      avatar.update(delta);
+    }
 
     if (this.#free) {
       this.seated.camera.position.set(this.#free.x, this.#free.y, this.#free.z);

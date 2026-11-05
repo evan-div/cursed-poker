@@ -241,7 +241,13 @@ Still open in this phase:
       room, never a stack, an action or a button
 - [x] `prefers-reduced-motion` removes the shake and the throb, keeps the
       sound and the closing edges
-- [ ] Avatar tell visualization
+- [x] Avatar tell visualization: hands that will not stay still on the felt,
+      a raised pair that trembles with the hand holding it, shoulders rising
+      faster and deeper, skin that shines and flushes and finally beads. Driven
+      by each seat's three broadcast tells and nothing else — a test feeds two
+      tables identical tells for one seat and different everything-else, and
+      requires identical motion. Your own hands shake on your screen exactly as
+      they do on everybody else's, from the same broadcast
 - [ ] Telemetry/replay harness so tuning is data-driven
 
 ---

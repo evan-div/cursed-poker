@@ -3,7 +3,8 @@ import type { Card, ClientView, PresenceFrame, SeatView } from '@cursed/shared';
 import { BACK_CELL, BLANK_CELL, faceCell } from './card-atlas.js';
 import { TOP_FACE, UNDERSIDE, applyPeel, makeCardGeometry, setFaceCell } from './card-mesh.js';
 import { cardAtlasTexture } from './card-texture.js';
-import { cardBend, heldCard, holeCardRest } from './hold.js';
+import { cardBend, heldCard, holeCardRest, raiseAmount } from './hold.js';
+import { STILL_MOTION, type TableTells, type TellMotion } from './tells.js';
 import { CARD, boardCardPosition, seatStation, stationAngle } from './layout.js';
 
 /**
@@ -137,13 +138,26 @@ interface HolePose {
 export { cardBend } from './hold.js';
 
 /** Where a card sits once its owner has picked it up. */
-function applyHandPose(mesh: Mesh, seatIndex: number, cardIndex: number, lift: number): void {
+function applyHandPose(
+  mesh: Mesh,
+  seatIndex: number,
+  cardIndex: number,
+  lift: number,
+  shake: TellMotion['heldCards'],
+): void {
   const held = heldCard(seatIndex, cardIndex, lift);
+  // Only cards in the air shake. A card on the felt is lying on the felt, and
+  // its corner is under a fingertip pressing it down.
+  const raised = raiseAmount(lift);
   // Set absolutely, never accumulated: this runs every frame, and a rotation
   // that adds to itself sixty times a second is a card in orbit.
-  mesh.position.set(held.position.x, held.position.y, held.position.z);
+  mesh.position.set(
+    held.position.x + shake.offset.x * raised,
+    held.position.y + shake.offset.y * raised,
+    held.position.z + shake.offset.z * raised,
+  );
   mesh.rotation.x = held.tilt;
-  mesh.rotation.z = held.roll;
+  mesh.rotation.z = held.roll + shake.roll * raised;
 }
 
 export class CardRenderer {
@@ -240,7 +254,7 @@ export class CardRenderer {
    * skipped whenever a card's bend has not changed, so a table of people
    * sitting still costs nothing.
    */
-  updatePoses(): void {
+  updatePoses(tells?: TableTells): void {
     for (const [seatIndex, meshes] of this.#hole) {
       // A revealed hand is lying face up on the table; nobody is holding it.
       const revealed = this.#revealed.get(seatIndex) ?? false;
@@ -256,7 +270,7 @@ export class CardRenderer {
           this.#bent.set(mesh, bend);
           applyPeel(mesh.geometry as BoxGeometry, bend);
         }
-        applyHandPose(mesh, seatIndex, index, lift);
+        applyHandPose(mesh, seatIndex, index, lift, (tells?.motion(seatIndex) ?? STILL_MOTION).heldCards);
       });
     }
   }

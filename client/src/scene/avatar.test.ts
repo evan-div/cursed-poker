@@ -4,6 +4,7 @@ import { Avatar } from './avatar.js';
 import { gazePoint } from './gaze.js';
 import { gripPose } from './hold.js';
 import { TABLE } from './layout.js';
+import { STILL_MOTION, type TellMotion } from './tells.js';
 
 /**
  * Bodies at the table.
@@ -256,5 +257,107 @@ describe('hands on the cards', () => {
 
     const at = worldOf(avatar, avatar.hands[0]!.group);
     expect(Math.abs(at.y - TABLE.surfaceHeight)).toBeLessThan(0.1);
+  });
+});
+
+describe('giving it away', () => {
+  /** A hand-built motion, so the test controls exactly what the body is told. */
+  function motion(over: Partial<TellMotion> = {}): TellMotion {
+    return { ...STILL_MOTION, ...over };
+  }
+
+  function wrist(avatar: Avatar, hand: 0 | 1): Vector3 {
+    avatar.group.updateMatrixWorld(true);
+    return avatar.hands[hand]!.group.getWorldPosition(new Vector3());
+  }
+
+  it('keeps its hands on the felt while it breathes', () => {
+    // The shoulders rise on each breath and the arms with them. The hands must
+    // not: a resting hand that lifted off the table with every breath would be
+    // the whole body bobbing, not a chest.
+    const avatar = new Avatar(1);
+    settle(avatar);
+    const rest = wrist(avatar, 0);
+    for (const breath of [0.004, 0.016, 0.009, 0]) {
+      avatar.setTells(motion({ breath }));
+      avatar.update(1 / 60);
+      expect(wrist(avatar, 0).distanceTo(rest)).toBeLessThan(1e-4);
+    }
+  });
+
+  it('lifts its shoulders and head on a breath', () => {
+    const avatar = new Avatar(1);
+    settle(avatar);
+    const before = skullPosition(avatar).y;
+    avatar.setTells(motion({ breath: 0.016 }));
+    avatar.update(1 / 60);
+    expect(skullPosition(avatar).y - before).toBeCloseTo(0.016, 3);
+  });
+
+  it('moves a resting hand by exactly its tremor', () => {
+    const avatar = new Avatar(4);
+    settle(avatar);
+    const rest = wrist(avatar, 1);
+    const push = { x: 0.004, y: -0.002, z: 0.003 };
+    avatar.setTells(motion({ hands: [{ x: 0, y: 0, z: 0 }, push] }));
+    avatar.update(1 / 60);
+    const moved = wrist(avatar, 1).sub(rest);
+    expect(moved.x).toBeCloseTo(push.x, 4);
+    expect(moved.y).toBeCloseTo(push.y, 4);
+    expect(moved.z).toBeCloseTo(push.z, 4);
+  });
+
+  it('shakes a raised pair and the hand holding it together', () => {
+    // The cards are rendered by `cards.ts` and the hand by this file. If they
+    // took different pushes, a trembling player would visibly lose their grip
+    // on their own cards every frame.
+    const still = new Avatar(2);
+    const shaking = new Avatar(2);
+    for (const avatar of [still, shaking]) {
+      avatar.setPeek(1, 1);
+      settle(avatar);
+    }
+    const card = { x: 0.006, y: 0.004, z: -0.005 };
+    shaking.setTells(
+      motion({
+        hands: [{ x: 0.004, y: 0.003, z: -0.003 }, { x: 0, y: 0, z: 0 }],
+        heldCards: { offset: card, roll: 0 },
+      }),
+    );
+    shaking.update(1 / 60);
+    still.update(1 / 60);
+
+    const moved = wrist(shaking, 0).sub(wrist(still, 0));
+    expect(moved.x).toBeCloseTo(card.x, 3);
+    expect(moved.y).toBeCloseTo(card.y, 3);
+    expect(moved.z).toBeCloseTo(card.z, 3);
+  });
+
+  it('shines, and then sweats, as it gets wet', () => {
+    const avatar = new Avatar(0);
+    avatar.update(1 / 60);
+    const dry = avatar.skinRoughness;
+    expect(avatar.sweating).toBe(false);
+
+    avatar.setTells(motion({ sweat: 0.5 }));
+    avatar.update(1 / 60);
+    expect(avatar.skinRoughness).toBeLessThan(dry);
+    expect(avatar.sweating).toBe(false);
+
+    avatar.setTells(motion({ sweat: 1 }));
+    avatar.update(1 / 60);
+    expect(avatar.sweating).toBe(true);
+  });
+
+  it('sweats alone: one wet face does not wet the table', () => {
+    const wet = new Avatar(0);
+    const dry = new Avatar(1);
+    dry.update(1 / 60);
+    const before = dry.skinRoughness;
+    wet.setTells(motion({ sweat: 1 }));
+    wet.update(1 / 60);
+    dry.update(1 / 60);
+    expect(dry.skinRoughness).toBe(before);
+    expect(wet.skinRoughness).toBeLessThan(before);
   });
 });

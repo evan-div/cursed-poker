@@ -55,6 +55,16 @@ export const MATERIALS = {
     emissive: '#7d6250',
     emissiveIntensity: 0.09,
   }),
+  /**
+   * A bead of sweat. Nearly mirror-smooth, so it catches the one lamp from
+   * across the table — which is the only reason anybody would see it.
+   */
+  sweat: standard({
+    color: '#b9a99a',
+    roughness: 0.06,
+    emissive: '#d8c6b4',
+    emissiveIntensity: 0.18,
+  }),
   cloth: standard({ color: '#2e2924', roughness: 1 }),
   clothAlt: standard({ color: '#38302a', roughness: 1 }),
   clothThird: standard({ color: '#26282a', roughness: 1 }),

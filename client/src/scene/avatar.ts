@@ -1,4 +1,15 @@
-import { CylinderGeometry, Group, Matrix4, Mesh, Quaternion, Vector3 } from 'three';
+import {
+  Color,
+  CylinderGeometry,
+  Group,
+  Matrix4,
+  Mesh,
+  MeshStandardMaterial,
+  Quaternion,
+  SphereGeometry,
+  Vector3,
+} from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { GAZE_AWAY, type GazeTarget } from '@cursed/shared';
 import { MATERIALS } from './materials.js';
 import {
@@ -14,6 +25,7 @@ import { roundedBox } from './shapes.js';
 import { gazePoint } from './gaze.js';
 import { gripPose, shieldPose, type Grip } from './hold.js';
 import { solveArm } from './ik.js';
+import { STILL_MOTION, type Offset, type TellMotion } from './tells.js';
 
 /**
  * A person at the table.
@@ -32,9 +44,48 @@ import { solveArm } from './ik.js';
  * whether you just re-checked your hand after that third heart landed has to be
  * watching you when you do it. Nothing here is ever announced, logged or
  * highlighted — if you were not looking, you missed it.
+ *
+ * Phase 6 gives it a nervous system. Hands that will not hold still on the
+ * felt, cards that tremble when they are held up, shoulders rising faster than
+ * they should, a face starting to shine. All of it is driven by the three
+ * coarse tells the server broadcasts and nothing else — see `tells.ts` — and
+ * all of it is equally quiet: a tell is something you notice, not something
+ * you are shown.
  */
 
 const CLOTH = [MATERIALS.cloth, MATERIALS.clothAlt, MATERIALS.clothThird];
+
+/**
+ * What sweat does to skin.
+ *
+ * Mostly shine: dry skin is nearly matte, and wet skin throws back the lamp.
+ * A little flush as well, because a face does not go wet and stay the same
+ * colour. Both are subtle in a dark room, which is right — the beads of sweat
+ * that appear at the very end are what somebody actually notices.
+ */
+const SWEAT_SKIN = {
+  roughness: { dry: 0.88, soaked: 0.3 },
+  flush: new Color('#8f5a49'),
+  /** How much of the way to that colour a soaked face goes. */
+  flushAmount: 0.45,
+  /** Beads appear past this much sweat, and are full size at one. */
+  beadsFrom: 0.72,
+} as const;
+
+/** Where beads of sweat sit on a skull, in the skull's own space. Front is +Z. */
+const BEADS: readonly [number, number, number][] = [
+  // The brow, low enough to be on the flat of the face rather than on the
+  // rounded edge where it turns away from the light.
+  [-0.042, 0.038, 0.096],
+  [-0.008, 0.046, 0.097],
+  [0.03, 0.034, 0.096],
+  [0.052, 0.05, 0.095],
+  // Temples, which catch the lamp from the side.
+  [-0.084, 0.018, 0.07],
+  [0.085, 0.006, 0.066],
+  // One on its way down.
+  [-0.06, -0.012, 0.095],
+];
 
 /** The fastest a neck turns, in radians per second. */
 const MAX_HEAD_TURN_PER_SECOND = 2.6;
@@ -76,7 +127,9 @@ const HEAD_LIMITS = {
 
 /** Everything needed to re-aim one arm after it has been built. */
 interface ArmChain {
+  /** Where the shoulder is this frame: it rises with each breath. */
   shoulder: Vector3;
+  shoulderRest: Vector3;
   upper: Group;
   upperLength: number;
   elbow: Group;
@@ -115,6 +168,15 @@ export class Avatar {
   #basis = new Matrix4();
   #handTurn = new Quaternion();
   #rest = new Quaternion();
+  /** This body's own skin, because only this body is sweating. */
+  #skin: MeshStandardMaterial;
+  #skinBase: Color;
+  #shownSweat = -1;
+  #beads: Mesh;
+  #shoulders: Mesh;
+  #shouldersRestY: number;
+  #tells: TellMotion = STILL_MOTION;
+  #handShift = new Vector3();
 
   constructor(readonly seatIndex: number) {
     const station = seatStation(seatIndex);
@@ -123,6 +185,10 @@ export class Avatar {
     this.group.rotation.y = facingCentreYaw(station);
 
     const cloth = CLOTH[seatIndex % CLOTH.length]!;
+    // A clone per body, so one player's sweat is not everybody's. Same shader,
+    // so it costs uniforms rather than a program.
+    this.#skin = MATERIALS.skin.clone();
+    this.#skinBase = this.#skin.color.clone();
 
     this.#body = new Group();
     this.#head = new Group();
@@ -147,6 +213,8 @@ export class Avatar {
 
     this.#torso = torso;
     this.#torsoRestX = torso.rotation.x;
+    this.#shoulders = shoulders;
+    this.#shouldersRestY = shoulders.position.y;
     this.#body.add(hips, torso, shoulders, this.#buildArm(-1, cloth), this.#buildArm(1, cloth));
 
     // The head group's origin IS the pivot, which has to be at the neck.
@@ -158,7 +226,7 @@ export class Avatar {
     // the origin, every time.
     this.#head.position.set(0, NECK_PIVOT.y, NECK_PIVOT.z);
 
-    const neck = new Mesh(new CylinderGeometry(0.048, 0.055, 0.09, 8), MATERIALS.skin);
+    const neck = new Mesh(new CylinderGeometry(0.048, 0.055, 0.09, 8), this.#skin);
     neck.position.set(0, 1.08 - NECK_PIVOT.y, 0.02 - NECK_PIVOT.z);
     // A head, and specifically not an ellipsoid.
     //
@@ -169,11 +237,32 @@ export class Avatar {
     // of neck actually showing, that trebles it. Every player at the table
     // turned into a lollipop on a stalk. A rounded box keeps its width down to
     // the jaw, which is the whole job.
-    const skull = new Mesh(roundedBox(0.165, 0.2, 0.185), MATERIALS.skin);
+    const skull = new Mesh(roundedBox(0.165, 0.2, 0.185), this.#skin);
     skull.position.set(0, 1.21 - NECK_PIVOT.y, 0.02 - NECK_PIVOT.z);
     skull.castShadow = true;
     this.#skull = skull;
+
+    // One mesh for every bead, so a soaked player costs one draw call and a
+    // dry one costs none.
+    this.#beads = new Mesh(
+      mergeGeometries(
+        BEADS.map(([x, y, z]) => new SphereGeometry(0.007, 6, 4).scale(1, 1.3, 0.7).translate(x, y, z)),
+      )!,
+      MATERIALS.sweat,
+    );
+    this.#beads.visible = false;
+    skull.add(this.#beads);
     this.#head.add(neck, skull);
+  }
+
+  /**
+   * What this body is giving away this frame.
+   *
+   * Read from `TableTells`, which the cards read too: the hand and the pair it
+   * is holding have to shake together, or one of them is lying.
+   */
+  setTells(motion: TellMotion): void {
+    this.#tells = motion;
   }
 
   /** Hides what the player would be looking through rather than at. */
@@ -264,9 +353,22 @@ export class Avatar {
     this.#headYaw += limit((this.#targetHeadYaw - this.#headYaw) * ease, most);
     this.#headPitch += limit((this.#targetHeadPitch - this.#headPitch) * ease, most);
 
+    const tells = this.#tells;
     this.#head.rotation.order = 'YXZ';
-    this.#head.rotation.y = this.#headYaw;
-    this.#head.rotation.x = this.#headPitch;
+    this.#head.rotation.y = this.#headYaw + tells.head.yaw;
+    this.#head.rotation.x = this.#headPitch + tells.head.pitch;
+
+    // A breath lifts the shoulders and the head on them, and the chest swells
+    // a little. The arms ride up with the shoulders and the hands stay where
+    // they are — the IK below starts from wherever the shoulder is now.
+    this.#head.position.y = NECK_PIVOT.y + tells.breath;
+    this.#shoulders.position.y = this.#shouldersRestY + tells.breath;
+    this.#torso.scale.set(1 + tells.breath * 1.2, 1 + tells.breath * 1.6, 1 + tells.breath * 2.4);
+    for (const arm of this.#arms) {
+      arm.upper.position.y = arm.shoulderRest.y + tells.breath;
+      arm.shoulder.y = arm.shoulderRest.y + tells.breath;
+    }
+    this.#applySweat(tells.sweat);
 
     // Leaning: over your own cards while peeking, or out over the table to see
     // the board. Whichever is further — you cannot do both and be sitting up.
@@ -343,10 +445,55 @@ export class Avatar {
     );
   }
 
-  /** Lets an arm hang where it was built to, hand open. */
+  /** Lets an arm hang where it was built to, hand open — and shaking, if it is. */
   #relax(arm: ArmChain): void {
-    this.#aimArm(arm, arm.restAt, this.#rest.identity());
+    this.#target.copy(arm.restAt).add(this.#shift(this.#handOffset(arm), 1));
+    this.#aimArm(arm, this.#target, this.#rest.identity());
     arm.hand.shape(0, 0);
+  }
+
+  #handOffset(arm: ArmChain): Offset {
+    return this.#tells.hands[this.#arms.indexOf(arm) === RIGHT ? 0 : 1];
+  }
+
+  /**
+   * A world-space tremor, turned into this body's own space and scaled.
+   *
+   * Tremor offsets are world vectors so the cards, which live in world space,
+   * can take the identical push.
+   */
+  #shift(offset: Offset, scale: number): Vector3 {
+    const yaw = -this.group.rotation.y;
+    const c = Math.cos(yaw);
+    const s = Math.sin(yaw);
+    return this.#handShift.set(
+      (offset.x * c + offset.z * s) * scale,
+      offset.y * scale,
+      (-offset.x * s + offset.z * c) * scale,
+    );
+  }
+
+  /** Shine, flush and finally beads. Only touches the material when it moved. */
+  #applySweat(sweat: number): void {
+    if (Math.abs(sweat - this.#shownSweat) < 0.004) return;
+    this.#shownSweat = sweat;
+    this.#skin.roughness =
+      SWEAT_SKIN.roughness.dry + (SWEAT_SKIN.roughness.soaked - SWEAT_SKIN.roughness.dry) * sweat;
+    this.#skin.color.copy(this.#skinBase).lerp(SWEAT_SKIN.flush, sweat * SWEAT_SKIN.flushAmount);
+
+    const beads = (sweat - SWEAT_SKIN.beadsFrom) / (1 - SWEAT_SKIN.beadsFrom);
+    this.#beads.visible = beads > 0;
+    if (beads > 0) this.#beads.scale.setScalar(0.4 + 0.6 * Math.min(beads, 1));
+  }
+
+  /** How shiny this body's skin is right now. For tests. */
+  get skinRoughness(): number {
+    return this.#skin.roughness;
+  }
+
+  /** Whether beads of sweat are showing. For tests. */
+  get sweating(): boolean {
+    return this.#beads.visible;
   }
 
   /**
@@ -381,6 +528,18 @@ export class Avatar {
     this.group.worldToLocal(this.#target);
     this.#target.sub(this.#offset);
     this.#target.lerpVectors(arm.restAt, this.#target, blend);
+
+    // Shaking. A hand holding raised cards takes their push, which is larger
+    // — they are a lever on it — so that the pinch stays on the card.
+    const own = this.#handOffset(arm);
+    const held = arm === this.#arms[RIGHT] ? this.#tells.heldCards.offset : own;
+    const r = grip.raise;
+    this.#target.add(
+      this.#shift(
+        { x: own.x + (held.x - own.x) * r, y: own.y + (held.y - own.y) * r, z: own.z + (held.z - own.z) * r },
+        1,
+      ),
+    );
 
     this.#aimArm(arm, this.#target, this.#handTurn);
   }
@@ -484,7 +643,7 @@ export class Avatar {
     // Undo everything the arm did on the way here, so the hand lies flat on the
     // table no matter what angle the arm arrived at.
     const hand = buildHand({
-      material: MATERIALS.skin,
+      material: this.#skin,
       // Two proportions worth getting right, because a hand is the part of this
       // body a player sees closest. A palm much flatter than this reads as a
       // paddle once its edges are rounded; fingers much shorter than the palm
@@ -502,7 +661,8 @@ export class Avatar {
 
     this.hands.push(hand);
     this.#arms.push({
-      shoulder: shoulderAt,
+      shoulder: shoulderAt.clone(),
+      shoulderRest: shoulderAt.clone(),
       upper: upper.joint,
       upperLength: upper.length,
       elbow,
