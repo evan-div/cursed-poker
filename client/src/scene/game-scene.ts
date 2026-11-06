@@ -357,6 +357,11 @@ export class GameScene {
     this.#audio = startRoomAudio();
   }
 
+  /** A breath let out, heard from inside your own head. For composure. */
+  exhale(): void {
+    this.#audio.breath(0.32);
+  }
+
   notify(events: MatchEvent[]): void {
     const now = performance.now();
     for (const event of events) {

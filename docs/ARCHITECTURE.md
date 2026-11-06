@@ -475,6 +475,15 @@ room.
 result against server-side timing windows. A client that reports "I succeeded"
 is not evidence.
 
+*Built in Phase 7* (`server/src/match/composure/`). There is no message that
+reports a result: `composure:input` carries a challenge id and `DOWN` or `UP`,
+nothing else, and the server timestamps it on arrival. Every kind judges the
+*intervals* between inputs, so latency cancels rather than being estimated.
+A result changes the stress a seat *shows* — `visibleStress`, applied in
+`projection.ts` on the way to the presence frame — and nothing upstream of
+that, so a composed player's own heart rate is untouched and the stress model
+does not know composure exists.
+
 ---
 
 ## 11. Decisions that can safely wait

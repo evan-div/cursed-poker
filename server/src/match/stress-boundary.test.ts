@@ -65,6 +65,9 @@ function seatFour(deckSeed: number) {
     // is a standing pressure), so he has to be held still for the comparison to
     // mean anything about the cards.
     dealerRng: new SeededRandomSource(99),
+    // Composure too: its challenges change the broadcast tells, so the same
+    // rhythms have to be drawn on both tables.
+    composureRng: new SeededRandomSource(77),
     structure: TURBO_BLIND_STRUCTURE,
     timings: FAST,
     telemetry: { event: (_, __, name) => void fired.add(name), settled: () => {}, forgot: () => {} },
@@ -135,6 +138,16 @@ function playOut(table: ReturnType<typeof seatFour>, hands: number): Tick[] {
       match.reportPresence(actor, { ...body, peek: 0.9 });
       match.reportPresence(actor, { ...body, peek: 0 });
 
+      // And tries to steady themselves whenever they are allowed to, then taps
+      // at whatever comes up — badly, on a fixed clock, which is fine: a
+      // fumble changes the tells as surely as a success does, and it has to
+      // change them identically over both decks.
+      try {
+        match.beginComposure(actor);
+      } catch {
+        // Already steadying, or not yet allowed again.
+      }
+
       // A fixed script chosen without looking at a single card: check when you
       // can, otherwise call. Identical on both tables by construction.
       const legal = match.viewFor(actor).you.legalActions;
@@ -142,6 +155,10 @@ function playOut(table: ReturnType<typeof seatFour>, hands: number): Tick[] {
       match.submitAction(actor, hand.handNumber, action);
     } else {
       clock.advance(120);
+      for (const id of playerIds) {
+        const challenge = match.viewFor(id).you.composure.challenge;
+        if (challenge) match.composureInput(id, challenge.id, 'DOWN');
+      }
     }
   }
 
@@ -167,6 +184,7 @@ describe('the cards cannot reach anybody’s heart rate', () => {
     // the Dealer's head, or their agreement below would prove nothing about them.
     expect(left.fired).toContain('RE_CHECKED');
     expect(left.fired).toContain('WATCHED');
+    expect(left.match.state.composure.issued, 'nobody ever tried to steady themselves').toBeGreaterThan(2);
 
     // The premise: these really are different hands, or the test proves nothing.
     expect(a.map((t) => t.cards)).not.toEqual(b.map((t) => t.cards));

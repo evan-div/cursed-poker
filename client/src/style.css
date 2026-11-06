@@ -238,3 +238,39 @@ input[type="range"] { padding: 0; accent-color: var(--brass); }
   background: #2a1210; color: #e5b3ac; border: 1px solid var(--blood);
 }
 .banner.info { background: #1a1a24; color: var(--ink); border-color: var(--panel-edge); }
+
+/* --- composure ------------------------------------------------------------ */
+
+/*
+ * On the open felt between your own cards and the board: where your eyes are
+ * already, and over nothing you need to see. The first version sat on the
+ * player's own hole cards, which made steadying yourself a way to stop being
+ * able to read your hand.
+ */
+.composure {
+  position: absolute; left: 50%; bottom: 41%;
+  transform: translateX(-50%);
+  display: grid; justify-items: center; gap: 10px;
+  pointer-events: none; opacity: 0; transition: opacity 0.25s;
+}
+.composure.active { opacity: 1; }
+.composure-dial { position: relative; width: 74px; height: 74px; }
+.composure-target, .composure-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  will-change: transform, opacity;
+}
+.composure-target { border: 2px solid rgba(222, 202, 160, 0.7); box-shadow: 0 0 10px rgba(0, 0, 0, 0.6) inset; }
+.composure-ring {
+  border: 2px solid rgba(232, 214, 176, 0.85);
+  box-shadow: 0 0 14px rgba(232, 214, 176, 0.25);
+}
+.composure[data-kind="HOLD"] .composure-ring { border-color: transparent; box-shadow: none; }
+.composure-label {
+  font-size: 11px; letter-spacing: 0.14em; text-transform: lowercase;
+  color: rgba(214, 204, 188, 0.82); text-shadow: 0 1px 4px #000; white-space: nowrap;
+}
+.composure-word {
+  font-size: 13px; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--brass); text-shadow: 0 1px 6px #000; opacity: 0;
+}
+.composure-word[data-outcome="SHAKEN"] { color: var(--warn); }

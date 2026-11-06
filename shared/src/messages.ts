@@ -15,6 +15,7 @@ import type { ClientView } from './view.js';
 import type { HandEvent } from './hand-events.js';
 import type { PresenceFrame } from './presence.js';
 import { MAX_PLAYERS, SEAT_COUNT } from './config.js';
+import { COMPOSURE_INPUTS } from './composure.js';
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -102,6 +103,28 @@ export const peekSchema = z.object({
   handNumber: z.number().int().positive(),
 });
 
+/**
+ * "Let me steady myself."
+ *
+ * Empty on purpose: the player does not get to choose the challenge, its
+ * difficulty or its kind. The server picks, and the reply is a fresh view
+ * containing it.
+ */
+export const beginComposureSchema = z.object({});
+
+/**
+ * A key going down or coming up, during a composure challenge.
+ *
+ * Deliberately without a timestamp. The server times every input by when it
+ * arrived, and judges intervals between inputs so latency cancels; a client's
+ * own clock is not evidence of anything. Nor is there any way to say how it
+ * went — see `composure.ts`.
+ */
+export const composureInputSchema = z.object({
+  challengeId: z.string().min(1).max(32),
+  input: z.enum(COMPOSURE_INPUTS),
+});
+
 export const createLobbySchema = z.object({ displayName: displayNameSchema });
 
 export const joinLobbySchema = z.object({
@@ -133,6 +156,7 @@ export type ResumeSessionPayload = z.infer<typeof resumeSessionSchema>;
 export type SetReadyPayload = z.infer<typeof setReadySchema>;
 export type StartMatchPayload = z.infer<typeof startMatchSchema>;
 export type SubmitActionPayload = z.infer<typeof submitActionSchema>;
+export type ComposureInputPayload = z.infer<typeof composureInputSchema>;
 
 /** Every inbound message name, paired with the schema that validates it. */
 export const CLIENT_MESSAGE_SCHEMAS = {
@@ -144,6 +168,8 @@ export const CLIENT_MESSAGE_SCHEMAS = {
   'poker:action': submitActionSchema,
   'poker:peek': peekSchema,
   'player:presence': presenceUpdateSchema,
+  'composure:begin': beginComposureSchema,
+  'composure:input': composureInputSchema,
 } as const;
 
 /**
@@ -175,6 +201,7 @@ export const ERROR_CODES = [
   'NOT_HOST',
   'NOT_ENOUGH_PLAYERS',
   'NOT_YOUR_TURN',
+  'NOT_READY',
   'ILLEGAL_ACTION',
   'STALE_HAND',
   'RATE_LIMITED',

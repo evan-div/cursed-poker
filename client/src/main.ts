@@ -16,6 +16,7 @@ import { renderLanding, renderLobby, type LobbyHandlers } from './ui/lobby.js';
 import { actionForKey, renderHud } from './ui/hud.js';
 import { Nameplates } from './ui/nameplates.js';
 import { Tunnel } from './ui/tunnel.js';
+import { ComposureOverlay } from './ui/composure.js';
 
 /**
  * Client bootstrap.
@@ -43,6 +44,7 @@ let pendingAction = false;
 let scene: GameScene | null = null;
 let nameplates: Nameplates | null = null;
 let tunnel: Tunnel | null = null;
+let composure: ComposureOverlay | null = null;
 let canvas: HTMLCanvasElement | null = null;
 let pointerLocked = false;
 /** The hand we have already asked to look at, so a re-check is not re-asked. */
@@ -228,12 +230,14 @@ function renderTable(current: ClientView): void {
     // stack or a button.
     tunnel = new Tunnel();
     nameplates = new Nameplates();
-    stage.append(tunnel.root, nameplates.root);
+    composure = new ComposureOverlay();
+    stage.append(tunnel.root, nameplates.root, composure.root);
 
     scene.onFrame = () => {
       if (!scene || !nameplates || !canvas) return;
       nameplates.project(scene.seated.camera, canvas.clientWidth, canvas.clientHeight);
       tunnel?.set(scene.felt.tunnel);
+      composure?.frame(performance.now(), scene.felt.unsteadiness);
     };
 
     // Pointer lock is offered, never imposed: clicking the table takes it,
@@ -258,6 +262,7 @@ function renderTable(current: ClientView): void {
   const stage = app.querySelector<HTMLElement>('.stage')!;
   scene.apply(current);
   nameplates?.update(current);
+  composure?.apply(current.you.composure, performance.now());
 
   // The overlay is rebuilt from scratch; the canvas and nameplates are not.
   for (const stale of stage.querySelectorAll('.hud, .banner')) stale.remove();
@@ -277,6 +282,7 @@ function teardownScene(): void {
   scene = null;
   nameplates = null;
   tunnel = null;
+  composure = null;
   canvas = null;
   pointerLocked = false;
   handlingChips(false);
@@ -291,9 +297,23 @@ function teardownScene(): void {
  * same submit, re-validated by the same server.
  */
 window.addEventListener('keydown', (event) => {
-  if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
   const target = event.target as HTMLElement | null;
   if (target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? '')) {
+    return;
+  }
+
+  // Composure. Space is only ever a breath while a challenge is running, and
+  // swallowed then so it cannot also press whatever button has focus.
+  if (event.key === ' ' && composure?.challengeId) {
+    event.preventDefault();
+    if (!event.repeat) composureKey('DOWN');
+    return;
+  }
+  if (event.repeat) return;
+  if (event.key.toLowerCase() === COMPOSURE_KEY) {
+    event.preventDefault();
+    void beginComposure();
     return;
   }
 
@@ -303,6 +323,38 @@ window.addEventListener('keydown', (event) => {
   event.preventDefault();
   void submit(action);
 });
+
+window.addEventListener('keyup', (event) => {
+  if (event.key !== ' ' || !composure?.challengeId) return;
+  event.preventDefault();
+  composureKey('UP');
+});
+
+/** The key that asks to steady yourself. B, for breathe. */
+const COMPOSURE_KEY = 'b';
+
+/**
+ * "Let me steady myself."
+ *
+ * A refusal — already steadying, or not yet allowed again — is not worth a
+ * banner. The hint already says when you can.
+ */
+async function beginComposure(): Promise<void> {
+  if (!view || !atTheTable(view) || view.you.composure.challenge) return;
+  await connection.send('composure:begin', {});
+}
+
+/**
+ * A breath tapped or held. Sent the instant it happens and timed by the server
+ * on arrival; the guide is told locally so it can move without waiting.
+ */
+function composureKey(input: 'DOWN' | 'UP'): void {
+  const id = composure?.challengeId;
+  if (!id) return;
+  composure!.press(input, performance.now());
+  connection.tell('composure:input', { challengeId: id, input });
+  if (input === 'DOWN') scene?.exhale();
+}
 
 function sliderValue(slider: HTMLInputElement | null): number | null {
   if (!slider) return null;
@@ -343,5 +395,12 @@ setInterval(() => {
     clock.textContent = view.level.endsAt === null ? '--:--' : `${minutes}:${String(seconds).padStart(2, '0')}`;
   }
 }, 1_000);
+
+// What this client was last told, for the browser checks in `scripts/`. It is
+// exactly what the server sent this player and nothing more, so exposing it in
+// development reveals nothing a player could not already see in the network tab.
+if (import.meta.env.DEV) {
+  (window as unknown as { __view?: () => ClientView | null }).__view = () => view;
+}
 
 render();

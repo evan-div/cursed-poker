@@ -11,12 +11,13 @@ import {
   type SelfFrame,
   type SelfView,
 } from '@cursed/shared';
-import { COMPOSED, dreadLevel } from '@cursed/shared';
+import { COMPOSED, NO_COMPOSURE, dreadLevel, tellsFor } from '@cursed/shared';
 import { legalActions } from '../poker/index.js';
 import { projectDealer } from './dealer.js';
 import { elapsedMs, findPlayer, type MatchState, type PlayerRecord } from './match-state.js';
 import { hasPeeked, projectPresence } from './presence.js';
-import { projectSelfStress, projectTells } from './stress.js';
+import { projectSelfStress, stressOf } from './stress.js';
+import { composureView, visibleStress } from './composure/index.js';
 
 /**
  * The hidden-information boundary.
@@ -101,7 +102,12 @@ export function presenceFrame(match: MatchState, now: number): PresenceFrame {
         connected,
         // Supplied rather than computed in `presence.ts`: that module lays out
         // bodies and has no business knowing how frightened anybody is.
-        tellsFor: (seatIndex) => projectTells(match.stress, seatIndex, now),
+        //
+        // What the table sees is the stress a seat *shows*: their real stress,
+        // passed through whatever composure has done to it. Their own heart,
+        // on `selfFrame`, is never passed through anything.
+        tellsFor: (seatIndex) =>
+          tellsFor(visibleStress(match.composure, seatIndex, stressOf(match.stress, seatIndex, now), now)),
       },
       now,
     ),
@@ -237,6 +243,7 @@ function projectSelf(match: MatchState, viewer: PlayerRecord | undefined, now: n
       hasPeeked: false,
       legalActions: null,
       stress: COMPOSED,
+      composure: NO_COMPOSURE,
     };
   }
 
@@ -263,5 +270,6 @@ function projectSelf(match: MatchState, viewer: PlayerRecord | undefined, now: n
     // frame instead — shaking and breathing, quantised, which is what somebody
     // across a dark table actually has to work with.
     stress: projectSelfStress(match.stress, viewer.seatIndex, now),
+    composure: composureView(match.composure, viewer.seatIndex, now),
   };
 }

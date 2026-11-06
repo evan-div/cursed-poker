@@ -41,6 +41,17 @@ import {
   type StressTuning,
 } from './stress.js';
 import type { StressObserver } from './stress-telemetry.js';
+import {
+  DEFAULT_COMPOSURE_KINDS,
+  beginComposure,
+  canBegin,
+  composureInput,
+  createComposure,
+  expireComposure,
+  forgetComposure,
+  type ComposureChallenge,
+} from './composure/index.js';
+import type { ComposureInput } from '@cursed/shared';
 import type { StressEvent } from '@cursed/shared';
 import {
   elapsedMs,
@@ -113,6 +124,14 @@ export interface MatchOptions {
   /** The Dealer's source of chance. Never the deck's — see `Match#dealerRng`. */
   dealerRng?: RandomSource;
   timings?: Partial<MatchTimings>;
+  /**
+   * Composure's source of chance: which challenge, and its rhythm. Separate
+   * from the deck's and the Dealer's, for the same reason they are separate
+   * from each other.
+   */
+  composureRng?: RandomSource;
+  /** The challenges a player may be given. Defaults to the shipped two. */
+  composureKinds?: readonly ComposureChallenge[];
   /** The stress model's numbers. Defaults to the shipped tuning. */
   stressTuning?: Partial<StressTuning>;
   /**
@@ -135,7 +154,12 @@ const MOVED_BY_HIS_HANDS = new Set<MatchEvent['type']>([
   'POT_AWARDED',
 ]);
 
-export type MatchListener = (events: MatchEvent[]) => void;
+/**
+ * Hears about every change. `only`, when set, means the change concerns that
+ * one player and nobody else may be told anything happened — not even by an
+ * empty update arriving at a telling moment.
+ */
+export type MatchListener = (events: MatchEvent[], only?: string) => void;
 
 export class Match {
   readonly state: MatchState;
@@ -153,6 +177,8 @@ export class Match {
   readonly #dealerRng: RandomSource;
   readonly #timings: MatchTimings;
   readonly #telemetry: StressObserver | null;
+  readonly #composureRng: RandomSource;
+  readonly #composureKinds: readonly ComposureChallenge[];
   /** How long the current decision's clock was armed for, for `CLOCK_LOW`. */
   #armedMs = 0;
   /** The deadline `CLOCK_LOW` last fired for, so it fires once per decision. */
@@ -174,6 +200,8 @@ export class Match {
     this.#dealerRng = options.dealerRng ?? new CryptoRandomSource();
     this.#timings = { ...DEFAULT_TIMINGS, ...options.timings };
     this.#telemetry = options.telemetry ?? null;
+    this.#composureRng = options.composureRng ?? new CryptoRandomSource();
+    this.#composureKinds = options.composureKinds ?? DEFAULT_COMPOSURE_KINDS;
 
     this.state = {
       roomCode: options.roomCode,
@@ -187,6 +215,7 @@ export class Match {
       presence: createPresence(),
       stress: createStress(options.stressTuning),
       dealer: createDealer(this.#clock.now()),
+      composure: createComposure(),
       startingPlayers: 0,
       sacrifices: 0,
       clockElapsedMs: 0,
@@ -223,6 +252,12 @@ export class Match {
     updateDealer(this.state.dealer, this.#dealerContext(now), this.#dealerRng, now);
     this.#noticeStare(now);
     this.#noticeClock(now);
+    // A challenge nobody finished is judged on what arrived, when its time is
+    // up — and the player hears how it went straight away.
+    for (const { seatIndex } of expireComposure(this.state.composure, this.#composureKinds, now)) {
+      const player = this.state.players.find((p) => p.seatIndex === seatIndex);
+      if (player) this.#flushTo(player.playerId);
+    }
     const pressures = this.#standingPressure(now);
     settleStress(this.state.stress, pressures, now);
     this.#telemetry?.settled(now, pressures, (seatIndex) => stressOf(this.state.stress, seatIndex, now));
@@ -426,6 +461,7 @@ export class Match {
     if (index < 0) return;
     forgetSeat(this.state.presence, this.state.players[index]!.seatIndex);
     forgetStress(this.state.stress, this.state.players[index]!.seatIndex);
+    forgetComposure(this.state.composure, this.state.players[index]!.seatIndex);
     this.#telemetry?.forgot(this.#clock.now(), this.state.players[index]!.seatIndex);
     this.state.players.splice(index, 1);
 
@@ -581,6 +617,52 @@ export class Match {
     if (first) this.#flush();
   }
 
+  // -------------------------------------------------------------------------
+  // Composure
+  // -------------------------------------------------------------------------
+
+  /**
+   * "Let me steady myself."
+   *
+   * The server picks the challenge and its parameters. The reply is a fresh
+   * view with the challenge in it, to this player only.
+   */
+  beginComposure(playerId: string): void {
+    const player = findPlayer(this.state, playerId);
+    if (!player) throw new MatchError('NOT_FOUND', 'You are not in this match');
+    if (this.state.status !== 'IN_PROGRESS' || player.eliminatedAt !== null) {
+      throw new MatchError('NOT_READY', 'There is nothing to steady yourself for');
+    }
+    const now = this.#clock.now();
+    const refusal = canBegin(this.state.composure, player.seatIndex, now);
+    if (refusal === 'BUSY') throw new MatchError('NOT_READY', 'You are already steadying yourself');
+    if (refusal === 'COOLING_DOWN') throw new MatchError('NOT_READY', 'Not yet');
+
+    beginComposure(this.state.composure, player.seatIndex, this.#composureKinds, this.#composureRng, now);
+    this.#flushTo(playerId);
+  }
+
+  /**
+   * A key going down or coming up during a challenge, timed on arrival.
+   *
+   * Never an error: an input for a challenge that has ended, or was never
+   * this player's, is simply nothing. Pushes a view only when it finished the
+   * challenge, so the player learns how it went.
+   */
+  composureInput(playerId: string, challengeId: string, input: ComposureInput): void {
+    const player = findPlayer(this.state, playerId);
+    if (!player || player.eliminatedAt !== null) return;
+    const result = composureInput(
+      this.state.composure,
+      player.seatIndex,
+      challengeId,
+      input,
+      this.#composureKinds,
+      this.#clock.now(),
+    );
+    if (result) this.#flushTo(playerId);
+  }
+
   #applyAction(seatIndex: number, action: PlayerAction): void {
     this.#clock.clearTimeout(this.#timer);
     this.#timer = null;
@@ -714,6 +796,7 @@ export class Match {
       this.state.table = eliminate(this.state.table!, seatIndex);
       player.eliminatedAt = this.#clock.now();
       player.place = place;
+      forgetComposure(this.state.composure, seatIndex);
       this.#emit({
         type: 'PLAYER_ELIMINATED',
         playerId: player.playerId,
@@ -884,6 +967,19 @@ export class Match {
       default:
         return;
     }
+  }
+
+  /**
+   * Tells one player their own view has changed, and nobody else anything.
+   *
+   * For changes that are private by design. A view pushed to the whole table
+   * at the moment somebody began steadying themselves would announce it as
+   * surely as a line in the log: nothing visible changed, and yet everybody's
+   * screen updated.
+   */
+  #flushTo(playerId: string): void {
+    if (this.#pendingEvents.length > 0) return this.#flush();
+    for (const listener of this.#listeners) listener([], playerId);
   }
 
   /** Hands the batch of events since the last flush to every subscriber. */

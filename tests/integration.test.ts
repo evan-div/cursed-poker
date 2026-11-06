@@ -509,6 +509,44 @@ describe('bodies over the wire', () => {
   }, 20_000);
 });
 
+describe('composure over the wire', () => {
+  it('tells only the player steadying themselves, and takes no client\'s word for how it went', async () => {
+    const group = await openLobby(4);
+    await emit(group[0]!.socket, 'lobby:start', {});
+    await waitFor(() => group.every((c) => c.latest?.hand !== null), 5_000, 'the first hand');
+    await new Promise((r) => setTimeout(r, 200));
+
+    const me = group[1]!;
+    const others = group.filter((c) => c !== me);
+    const before = others.map((c) => c.views.length);
+
+    expect((await emit(me.socket, 'composure:begin', {})).ok).toBe(true);
+    await waitFor(() => me.latest?.you.composure.challenge !== null, 2_000, 'the challenge');
+    const challenge = me.latest!.you.composure.challenge!;
+    expect(['BREATH', 'HOLD']).toContain(challenge.kind);
+
+    // Nobody else's screen so much as refreshed.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(others.map((c) => c.views.length)).toEqual(before);
+    for (const other of others) expect(JSON.stringify(other.latest)).not.toContain(challenge.id);
+
+    // A client that announces its own success is ignored: the extra fields are
+    // stripped at the schema, and one key press finishes nothing.
+    const claim = { challengeId: challenge.id, input: 'DOWN', outcome: 'STEADIED', quality: 1, at: 0 };
+    expect((await emit(me.socket, 'composure:input', claim)).ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(me.latest!.you.composure.challenge?.id).toBe(challenge.id);
+    expect(me.latest!.you.composure.result).toBeNull();
+
+    // And nonsense is refused at the door.
+    expect(await emit(me.socket, 'composure:input', { challengeId: challenge.id, input: 'WIN' })).toMatchObject({
+      ok: false,
+      code: 'BAD_REQUEST',
+    });
+    expect(await emit(me.socket, 'composure:begin', {})).toMatchObject({ ok: false, code: 'NOT_READY' });
+  }, 20_000);
+});
+
 describe('reconnecting over the wire', () => {
   it('restores the same seat and the same hole cards after a drop', async () => {
     const group = await openLobby(4);

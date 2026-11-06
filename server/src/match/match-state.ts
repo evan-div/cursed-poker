@@ -3,6 +3,7 @@ import type { TableState } from '../poker/index.js';
 import type { DealerState } from './dealer.js';
 import type { PresenceState } from './presence.js';
 import type { StressState } from './stress.js';
+import type { ComposureState } from './composure/index.js';
 
 /**
  * Authoritative match state.
@@ -65,6 +66,13 @@ export interface MatchState {
    * reach a hand, and no hand reads anything back from him.
    */
   dealer: DealerState;
+
+  /**
+   * Who is in the middle of steadying themselves, and how the last attempt
+   * went. Sits between `stress` and the broadcast: it changes what the table
+   * is shown, never what anybody actually feels. See `composure/`.
+   */
+  composure: ComposureState;
 
   /**
    * How many players who sat down at the start. Fixed once the match begins.

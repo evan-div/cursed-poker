@@ -274,10 +274,26 @@ Still open in this phase:
 
 ## Phase 7 — Composure
 
-- [ ] `ComposureChallenge` interface (issue → input → server-validated result)
-- [ ] One prototype minigame behind it
-- [ ] Success reduces visible tells; failure temporarily worsens them
-- [ ] Verify a second minigame can be swapped in without touching the stress model
+- [x] `ComposureChallenge` interface (issue → input → server-validated result).
+      The client sends raw key presses with no timestamps; the server times
+      them on arrival and judges *intervals*, so latency cancels and there is
+      no message that can claim a result
+- [x] One prototype minigame behind it: **steady breath** — tap a slow,
+      uneven rhythm while your own racing heartbeat is in your ears
+- [x] Success reduces visible tells; failure temporarily worsens them. Applied
+      between the stress model and the broadcast: it changes what the table
+      is *shown*, never what you feel — your heart rate does not move
+- [x] Verify a second minigame can be swapped in without touching the stress
+      model: **hold your breath** ships as the second kind, and a test plugs in
+      a third that exists only in the test file and runs it through a match.
+      An import-graph test holds that the stress model and the minigames cannot
+      name each other
+- [x] Private by construction: a challenge and its result reach their owner
+      only — not even an empty view refresh reaches anybody else at the moment
+      somebody starts steadying themselves
+- [x] Through the card boundary: the two-decks test now has every player
+      attempting composure, and tells still agree tick for tick while a hand
+      is live
 
 ---
 

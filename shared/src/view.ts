@@ -15,6 +15,7 @@ import type { Card } from './cards.js';
 import type { HandResult } from './hand-events.js';
 import type { HandCategory, HandPhase, LegalActions } from './poker-types.js';
 import type { SelfStress } from './stress.js';
+import type { ComposureView } from './composure.js';
 
 export const MATCH_STATUSES = ['LOBBY', 'IN_PROGRESS', 'FINISHED'] as const;
 export type MatchStatus = (typeof MATCH_STATUSES)[number];
@@ -105,6 +106,12 @@ export interface SelfView {
    * a person across a table actually has to work with.
    */
   stress: SelfStress;
+  /**
+   * Your own composure: the challenge you are in the middle of, how the last
+   * one went, and when you may try again. Owner-only, like your heart — the
+   * table learns how it went from your tells, and only from your tells.
+   */
+  composure: ComposureView;
 }
 
 export interface LevelView {

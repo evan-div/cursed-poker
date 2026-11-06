@@ -5,6 +5,7 @@ import {
   PRESENCE_MESSAGES,
   type BlindStructure,
   type ClientMessageName,
+  type ComposureInputPayload,
   type ErrorCode,
   type MatchEvent,
   type PresenceInput,
@@ -215,6 +216,10 @@ export class GameServer {
         return this.#peek(state, parsed.data as { handNumber: number }, ack);
       case 'player:presence':
         return this.#presence(state, parsed.data as PresenceInput, ack);
+      case 'composure:begin':
+        return this.#beginComposure(state, ack);
+      case 'composure:input':
+        return this.#composureInput(state, parsed.data as ComposureInputPayload, ack);
     }
   }
 
@@ -293,6 +298,22 @@ export class GameServer {
     // The cards are not in this reply. Marking the seat as having looked causes
     // the match to push a fresh view, and the view is where the cards live.
     room.match.peek(playerId, payload.handNumber);
+    this.#ok(ack);
+  }
+
+  #beginComposure(state: ConnectionState, ack?: AckFn): void {
+    const { room, playerId } = this.#require(state);
+    // The challenge is not in this reply either: it arrives in a view, to this
+    // player alone, like everything else they are allowed to know.
+    room.match.beginComposure(playerId);
+    this.#ok(ack);
+  }
+
+  #composureInput(state: ConnectionState, payload: ComposureInputPayload, ack?: AckFn): void {
+    // Timed by the match on arrival, which is the whole point: there is no
+    // field in this payload that says when, or how well.
+    const { room, playerId } = this.#require(state);
+    room.match.composureInput(playerId, payload.challengeId, payload.input);
     this.#ok(ack);
   }
 
@@ -415,7 +436,7 @@ export class GameServer {
     if (this.#unsubscribes.has(room.code)) return;
     this.#unsubscribes.set(
       room.code,
-      room.match.onUpdate((events) => this.#push(room, events)),
+      room.match.onUpdate((events, only) => this.#push(room, events, only)),
     );
   }
 
