@@ -412,6 +412,9 @@ describe('bodies over the wire', () => {
       'tremor',
       'breathing',
       'sweat',
+      // Phase 7: that somebody is steadying themselves, as one bit — never
+      // the challenge, its rhythm, its progress or how it went.
+      'composing',
     ]);
     let leaves = 0;
     const walk = (node: unknown): void => {
@@ -525,10 +528,23 @@ describe('composure over the wire', () => {
     const challenge = me.latest!.you.composure.challenge!;
     expect(['BREATH', 'HOLD']).toContain(challenge.kind);
 
-    // Nobody else's screen so much as refreshed.
+    // Nobody else's view so much as refreshed: the challenge is not theirs to
+    // know about.
     await new Promise((r) => setTimeout(r, 300));
     expect(others.map((c) => c.views.length)).toEqual(before);
     for (const other of others) expect(JSON.stringify(other.latest)).not.toContain(challenge.id);
+
+    // But everybody can see them doing it — as one bit on the body broadcast,
+    // and nothing about the challenge riding along with it.
+    const mySeat = me.latest!.you.seatIndex!;
+    for (const other of others) {
+      await waitFor(
+        () => other.presence.at(-1)?.seats.find((s) => s.seatIndex === mySeat)?.composing === true,
+        2_000,
+        `${other.name} to see them steadying themselves`,
+      );
+      expect(JSON.stringify(other.presence.at(-1))).not.toContain(challenge.id);
+    }
 
     // A client that announces its own success is ignored: the extra fields are
     // stripped at the schema, and one key press finishes nothing.

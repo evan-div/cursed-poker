@@ -288,9 +288,15 @@ Still open in this phase:
       a third that exists only in the test file and runs it through a match.
       An import-graph test holds that the stress model and the minigames cannot
       name each other
-- [x] Private by construction: a challenge and its result reach their owner
-      only — not even an empty view refresh reaches anybody else at the moment
-      somebody starts steadying themselves
+- [x] Steadying yourself is a visible act: the whole table sees your head go
+      down and your breathing slow and deepen, for as long as the challenge
+      runs. Broadcast as one bit (`composing`) — never which challenge, its
+      rhythm, its progress or its outcome; the table reads how it went from
+      your tells afterwards. A player doing well and one doing nothing look
+      identical until they finish
+- [x] The challenge itself stays private: its kind, rhythm and result reach
+      their owner only — not even an empty view refresh reaches anybody else
+      at the moment somebody starts
 - [x] Through the card boundary: the two-decks test now has every player
       attempting composure, and tells still agree tick for tick while a hand
       is live

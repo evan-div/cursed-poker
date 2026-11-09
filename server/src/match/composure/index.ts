@@ -199,6 +199,16 @@ export function visibleStress(state: ComposureState, seatIndex: number, stress: 
   return stress + COMPOSURE.shakenAdds * remaining * (1 - stress);
 }
 
+/**
+ * Whether a seat is in the middle of steadying themselves.
+ *
+ * The one fact about composure the whole table is given. Not which challenge,
+ * not how it is going: only that they are doing it.
+ */
+export function isComposing(state: ComposureState, seatIndex: number): boolean {
+  return state.seats.some((s) => s.seatIndex === seatIndex && s.challenge !== null);
+}
+
 /** What a player is told about their own composure. */
 export function composureView(state: ComposureState, seatIndex: number | null, now: number): ComposureView {
   if (seatIndex === null) return NO_COMPOSURE;

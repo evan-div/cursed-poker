@@ -32,8 +32,14 @@
  * connection costs nothing and a fast one gains nothing — both presses of an
  * interval crossed the same wire.
  *
- * **It is private.** Only you are told a challenge is running. The table sees
- * the result, in your tells, the same way it sees everything else about you.
+ * **Doing it is public; how it goes is not.** Everybody at the table sees you
+ * steady yourself — the head goes down, the breathing slows — because that is
+ * what composing yourself looks like, and a player who does it has told the
+ * table they needed to. That is the cost, and it is what makes this a decision
+ * rather than a free button. What only you are told is the challenge itself:
+ * which kind, its rhythm, how it is going. The table learns how it went the
+ * same way it learns everything else about you, from your tells afterwards.
+ * See `SeatPresence.composing`, which is one bit for exactly this reason.
  */
 
 /** The kinds of challenge, by name. Open, so a new one is a new module. */

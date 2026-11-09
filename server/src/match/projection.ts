@@ -17,7 +17,7 @@ import { projectDealer } from './dealer.js';
 import { elapsedMs, findPlayer, type MatchState, type PlayerRecord } from './match-state.js';
 import { hasPeeked, projectPresence } from './presence.js';
 import { projectSelfStress, stressOf } from './stress.js';
-import { composureView, visibleStress } from './composure/index.js';
+import { composureView, isComposing, visibleStress } from './composure/index.js';
 
 /**
  * The hidden-information boundary.
@@ -108,6 +108,9 @@ export function presenceFrame(match: MatchState, now: number): PresenceFrame {
         // on `selfFrame`, is never passed through anything.
         tellsFor: (seatIndex) =>
           tellsFor(visibleStress(match.composure, seatIndex, stressOf(match.stress, seatIndex, now), now)),
+        // That they are steadying themselves is public; everything about how
+        // is not. One bit — see `SeatPresence.composing`.
+        composingFor: (seatIndex) => isComposing(match.composure, seatIndex),
       },
       now,
     ),

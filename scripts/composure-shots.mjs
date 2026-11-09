@@ -106,15 +106,9 @@ for (let attempt = 0; attempt < 5 && played.size < 2; attempt++) {
   check((await challengeOf(other)) === null, 'nobody else was told');
   check((await other.evaluate(() => window.__view()?.serverTime)) === before, 'nobody else even received a view');
 
-  if (!played.has(challenge.kind)) {
-    // The guide, mid-challenge, before the first key.
-    await me.waitForFunction(
-      () => Number(getComputedStyle(document.querySelector('.composure')).opacity) > 0.95,
-      null,
-      { timeout: 15_000 },
-    );
-    await me.screenshot({ path: `${OUT}/${challenge.kind.toLowerCase()}-guide.png` });
-  }
+  // No photograph before playing: a software-rendered screenshot takes long
+  // enough here to use up the few seconds a player has to start. The guide is
+  // photographed in the fumble below, which sits on it doing nothing anyway.
   await play(challenge);
   await me.waitForFunction(
     (id) => window.__view()?.you.composure.result && !window.__view()?.you.composure.challenge,
@@ -128,9 +122,45 @@ for (let attempt = 0; attempt < 5 && played.size < 2; attempt++) {
 }
 check(played.size === 2, `played both kinds (${[...played].join(', ')})`);
 
-// --- One fumbled ------------------------------------------------------------
+// --- One fumbled, watched from across the table -----------------------------
+
+// Two players are enough from here, and fewer pages rendering means a
+// software-rendered page that animates at something like its real speed.
+for (const page of pages.slice(2)) await page.close();
+const mySeat = await me.evaluate(() => window.__view().you.seatIndex);
+const composingSeen = () =>
+  other.evaluate((seat) => window.__bodies().table.find((t) => t.seat === seat)?.composing, mySeat);
+
+// Seat n sits at (n+1)/7 of the way round the ring. See `body-shots.mjs`.
+const seatAt = (s, radius, y) => {
+  const angle = ((s + 1) / 7) * Math.PI * 2;
+  return [Math.sin(angle) * radius, y, -Math.cos(angle) * radius];
+};
+await other.evaluate(
+  ([p, look]) => window.__freeLook(p[0], p[1], p[2], look),
+  [seatAt(mySeat, -0.2, 1.25), seatAt(mySeat, 1.02, 1.12)],
+);
+await other.waitForTimeout(2_000);
+check((await composingSeen()) === false, 'not composing, the table sees nothing');
+await other.screenshot({ path: `${OUT}/across-calm.png` });
 
 challenge = await ask(challenge);
+await other.waitForFunction(
+  (seat) => window.__bodies().table.find((t) => t.seat === seat)?.composing === true,
+  mySeat,
+  { timeout: 5_000 },
+);
+check(true, 'the table sees them steadying themselves');
+// The guide, on the composing player's own screen.
+await me
+  .waitForFunction(() => Number(getComputedStyle(document.querySelector('.composure')).opacity) > 0.95, null, {
+    timeout: 5_000,
+  })
+  .catch(() => {});
+await me.screenshot({ path: `${OUT}/${challenge.kind.toLowerCase()}-guide.png` });
+// Let the body settle into it — it eases on rendered frames.
+await other.waitForTimeout(2_500);
+await other.screenshot({ path: `${OUT}/across-composing.png` });
 // The guide fades in on rendered frames, and software rendering here is a
 // frame or two a second: wait for it rather than for a clock.
 await me.waitForFunction(
@@ -150,6 +180,12 @@ await me.waitForFunction(
 await me.screenshot({ path: `${OUT}/faltered.png` });
 const bad = await me.evaluate(() => window.__view().you.composure.result);
 check(bad.outcome === 'SHAKEN', `doing nothing was scored ${bad.outcome} (${bad.quality.toFixed(2)})`);
+await other.waitForFunction(
+  (seat) => window.__bodies().table.find((t) => t.seat === seat)?.composing === false,
+  mySeat,
+  { timeout: 5_000 },
+);
+check(true, 'and stops seeing it when it is over');
 
 console.log(problems.length ? `PROBLEMS:\n${[...new Set(problems)].join('\n')}` : 'no page errors');
 await browser.close();

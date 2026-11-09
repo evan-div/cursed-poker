@@ -268,6 +268,18 @@ export interface SeatPresence {
    * why none of these may ever depend on what somebody holds.
    */
   tells: SeatTells;
+  /**
+   * They are steadying themselves, right now.
+   *
+   * One bit, and deliberately only one. Composing yourself at a card table is
+   * something people do in front of each other — a bowed head, a slow breath —
+   * and a player who does it has told the table they needed to. What is never
+   * here: which challenge, its rhythm, how far through it they are, or how it
+   * is going. The keys they press would be a transcript of their nerves at full
+   * resolution, for the same reason a tremor is quantised before it is sent;
+   * and how it went, everybody learns the honest way, from their tells after.
+   */
+  composing: boolean;
 }
 
 export interface PresenceFrame {

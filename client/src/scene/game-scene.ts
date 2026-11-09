@@ -208,6 +208,7 @@ export class GameScene {
           stillMs: seat.stillMs,
           present: seat.present,
           tells: seat.tells,
+          composing: seat.composing,
         })),
       });
 
@@ -311,6 +312,9 @@ export class GameScene {
     // Every seat, the local one included: your own hands shake on your screen
     // exactly as they shake on everybody else's, from the same broadcast.
     this.#tells.applyPresence(frame);
+    // Steadying yourself is visible on every body, yours included — your own
+    // hands and shoulders do it on your screen exactly as on everybody else's.
+    for (const seat of frame.seats) this.#avatars.get(seat.seatIndex)?.setComposing(seat.composing);
     // The Dealer is a body on this channel too, and nothing about him is
     // decided here — see `dealer.ts`. The room's dread rides along with him
     // because lighting that differed between two players would make them

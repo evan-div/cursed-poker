@@ -74,7 +74,7 @@ describe('asking to steady yourself', () => {
     expect(() => lobby.beginComposure('nobody')).toThrow(/not in this match/);
   });
 
-  it('tells you, and only you, and does not wake anybody else', () => {
+  it('tells you the challenge, and nobody else, and does not wake anybody', () => {
     const t = table();
     t.pushes.length = 0;
     t.match.beginComposure('p1');
@@ -88,7 +88,54 @@ describe('asking to steady yourself', () => {
       expect(view.you.composure.challenge).toBeNull();
       expect(JSON.stringify(view)).not.toContain(`"${mine!.id}"`);
     }
-    expect(JSON.stringify(t.match.presenceFor())).not.toMatch(/composure|challenge/i);
+    // The broadcast says nothing about the challenge — not its id, its kind
+    // or a single number from its rhythm. Only the bit, below.
+    const frame = JSON.stringify(t.match.presenceFor());
+    expect(frame).not.toContain(`"${mine!.id}"`);
+    expect(frame).not.toMatch(/BREATH|HOLD|challenge|gapsMs|holdMs/);
+    for (const value of Object.values(mine!.spec).flat()) expect(frame).not.toContain(`:${value},`);
+  });
+
+  it('lets the whole table see you do it, and nothing more', () => {
+    const t = table();
+    const composing = () =>
+      Object.fromEntries(t.match.presenceFor().seats.map((s) => [s.seatIndex, s.composing]));
+    expect(Object.values(composing()).every((c) => c === false)).toBe(true);
+
+    t.match.beginComposure('p1');
+    const during = composing();
+    expect(during[t.seatOf('p1')]).toBe(true);
+    for (const id of ['p0', 'p2', 'p3']) expect(during[t.seatOf(id)]).toBe(false);
+
+    // And it stops when they stop — succeed, fail or run out of time alike.
+    t.steady('p1');
+    expect(composing()[t.seatOf('p1')]).toBe(false);
+
+    t.clock.advance(COMPOSURE.cooldownMs);
+    t.match.beginComposure('p1');
+    expect(composing()[t.seatOf('p1')]).toBe(true);
+    t.clock.advance(t.match.viewFor('p1').you.composure.challenge!.expiresAt - t.clock.now());
+    t.match.tick();
+    expect(composing()[t.seatOf('p1')]).toBe(false);
+  });
+
+  it('looks the same from outside whether it is going well or badly', () => {
+    // The act is public; the score is not. Two players mid-challenge, one
+    // tapping perfectly and one doing nothing, are the same bit on the frame
+    // until they finish — and then everybody reads the result in their tells.
+    const t = table([breathChallenge]);
+    t.match.beginComposure('p1');
+    t.match.beginComposure('p2');
+    const gaps = (t.match.viewFor('p1').you.composure.challenge!.spec as BreathSpec).gapsMs;
+    t.press('p1', 'DOWN', 100);
+    t.press('p1', 'DOWN', gaps[0]!);
+    const seats = t.match.presenceFor().seats;
+    const of = (id: string) => {
+      const { seatIndex: _seat, tells: _tells, ...rest } = seats.find((s) => s.seatIndex === t.seatOf(id))!;
+      return rest;
+    };
+    expect(of('p1').composing).toBe(true);
+    expect(of('p2')).toEqual(of('p1'));
   });
 
   it('will not stack challenges, and makes you wait after one', () => {

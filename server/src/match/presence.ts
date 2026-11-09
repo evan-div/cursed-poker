@@ -256,6 +256,8 @@ export interface PresenceFrameOptions {
    * frightened anybody is — only how to lay a body out for broadcast.
    */
   tellsFor?: (seatIndex: number) => SeatTells;
+  /** Whether each seat is visibly steadying themselves. Supplied for the same reason. */
+  composingFor?: (seatIndex: number) => boolean;
   /** Seats currently at the table, in seat order. */
   seatIndices: readonly number[];
   /** Seats whose player is connected. Everyone else stops moving entirely. */
@@ -300,6 +302,7 @@ export function projectPresence(
         stillMs: 0,
         present,
         tells: options.tellsFor?.(seatIndex) ?? CALM,
+        composing: present && (options.composingFor?.(seatIndex) ?? false),
       };
     }
 
@@ -322,6 +325,7 @@ export function projectPresence(
       // An empty chair does not sweat. A disconnected player's body is held and
       // then decays, but their fear leaves with them.
       tells: present ? (options.tellsFor?.(seatIndex) ?? CALM) : CALM,
+      composing: present && (options.composingFor?.(seatIndex) ?? false),
     };
   });
 

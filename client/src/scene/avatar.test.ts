@@ -361,3 +361,77 @@ describe('giving it away', () => {
     expect(wet.skinRoughness).toBeLessThan(before);
   });
 });
+
+describe('steadying themselves', () => {
+  it('bows its head, and comes back up when it stops', () => {
+    const avatar = new Avatar(3);
+    settle(avatar);
+    const level = avatar.headPitch;
+
+    avatar.setComposing(true);
+    settle(avatar);
+    expect(avatar.composing).toBeGreaterThan(0.99);
+    expect(avatar.headPitch).toBeLessThan(level - 0.2);
+
+    avatar.setComposing(false);
+    settle(avatar);
+    expect(avatar.composing).toBe(0);
+    expect(avatar.headPitch).toBeCloseTo(level, 4);
+  });
+
+  it('settles into it rather than snapping', () => {
+    const avatar = new Avatar(3);
+    avatar.setComposing(true);
+    avatar.update(1 / 60);
+    expect(avatar.composing).toBeGreaterThan(0);
+    expect(avatar.composing).toBeLessThan(0.1);
+  });
+
+  it('breathes slowly and deeply, over whatever its tells were doing', () => {
+    // A panicked body, breathing fast and shallow from its tells...
+    const panicked = { ...STILL_MOTION, breath: 0 };
+    const avatar = new Avatar(2);
+    let phase = 0;
+    const fast = (seconds: number) => {
+      let lowest = Infinity;
+      let highest = -Infinity;
+      let cycles = 0;
+      let last = 0;
+      let rising = false;
+      for (let t = 0; t < seconds; t += 1 / 60) {
+        phase += (1 / 60) * (34 / 60);
+        const breath = 0.016 * 0.5 * (1 - Math.cos(phase * Math.PI * 2));
+        avatar.setTells({ ...panicked, breath });
+        avatar.update(1 / 60);
+        const y = skullPosition(avatar).y;
+        lowest = Math.min(lowest, y);
+        highest = Math.max(highest, y);
+        if (y > last && !rising) cycles++;
+        rising = y > last;
+        last = y;
+      }
+      return { cycles, depth: highest - lowest };
+    };
+    const before = fast(20);
+
+    // ...takes a slow breath when it steadies itself.
+    avatar.setComposing(true);
+    fast(3);
+    const during = fast(20);
+    expect(during.cycles).toBeLessThan(before.cycles / 3);
+    expect(during.depth).toBeGreaterThan(before.depth);
+  });
+
+  it('keeps its hands where they were', () => {
+    const avatar = new Avatar(1);
+    settle(avatar);
+    avatar.group.updateMatrixWorld(true);
+    const rest = avatar.hands[0]!.group.getWorldPosition(new Vector3());
+    avatar.setComposing(true);
+    for (let i = 0; i < 600; i++) {
+      avatar.update(1 / 60);
+      avatar.group.updateMatrixWorld(true);
+      expect(avatar.hands[0]!.group.getWorldPosition(new Vector3()).distanceTo(rest)).toBeLessThan(1e-4);
+    }
+  });
+});

@@ -120,7 +120,8 @@ function peekHint(state: HudState): HTMLElement {
     box.append(el('span', 'hint-quiet', 'Click the table to look around freely'));
   } else if (!view.you.composure.challenge && view.serverTime >= view.you.composure.readyAt) {
     // Only once they have looked: the first thing to learn is the cards.
-    box.append(el('span', 'hint-quiet', 'B — steady yourself. It does not slow your heart; it hides it.'));
+    box.append(el('span', 'hint-strong', 'B — steady yourself'));
+    box.append(el('span', 'hint-quiet', 'It hides your heart; it does not slow it. They will see you do it.'));
   }
   return box;
 }

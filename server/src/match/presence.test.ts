@@ -181,7 +181,7 @@ describe('looking at your own cards', () => {
     // four times, not a count of it.
     const seat = frame(presence, T0 + 1_600).seats[0]!;
     expect(Object.keys(seat).sort()).toEqual(
-      ['gaze', 'handlingChips', 'lean', 'lift', 'peek', 'present', 'seatIndex', 'stillMs', 'tells'].sort(),
+      ['composing', 'gaze', 'handlingChips', 'lean', 'lift', 'peek', 'present', 'seatIndex', 'stillMs', 'tells'].sort(),
     );
   });
 
@@ -274,6 +274,9 @@ describe('the presence frame as a boundary', () => {
       'tells',
       'tremor',
       'breathing',
+      // Phase 7: that they are steadying themselves, as one bit. Never which
+      // challenge, its rhythm, its progress or its outcome.
+      'composing',
       'sweat',
     ]);
     const walk = (node: unknown): void => {

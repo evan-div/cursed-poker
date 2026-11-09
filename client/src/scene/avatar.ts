@@ -51,6 +51,12 @@ import { STILL_MOTION, type Offset, type TellMotion } from './tells.js';
  * coarse tells the server broadcasts and nothing else — see `tells.ts` — and
  * all of it is equally quiet: a tell is something you notice, not something
  * you are shown.
+ *
+ * Phase 7 adds the one thing a body does on purpose about all that: steadying
+ * itself. The head goes down, the breathing becomes slow and deep and takes
+ * over from whatever the tells were doing to it. The hands are left alone —
+ * they shake as much as they shook, because the table should see somebody
+ * *trying* to settle shaking hands, not hands that already have.
  */
 
 const CLOTH = [MATERIALS.cloth, MATERIALS.clothAlt, MATERIALS.clothThird];
@@ -70,6 +76,24 @@ const SWEAT_SKIN = {
   flushAmount: 0.45,
   /** Beads appear past this much sweat, and are full size at one. */
   beadsFrom: 0.72,
+} as const;
+
+/** What steadying yourself looks like from across the table. */
+const COMPOSING = {
+  /**
+   * How far the head bows, in radians: about twenty degrees. On a head with
+   * no face the bow is the whole signal, and fifteen read from across the
+   * table as somebody glancing down rather than somebody shutting their eyes.
+   */
+  bow: 0.36,
+  /** How much of a turned head comes back toward straight ahead. */
+  faceForward: 0.6,
+  /** A slow, deliberate breath: six a minute, and deep. */
+  breathsPerMinute: 6,
+  breathMetres: 0.024,
+  /** Seconds to settle into it, and to come out of it. */
+  easeIn: 0.7,
+  easeOut: 0.45,
 } as const;
 
 /** Where beads of sweat sit on a skull, in the skull's own space. Front is +Z. */
@@ -176,6 +200,9 @@ export class Avatar {
   #shoulders: Mesh;
   #shouldersRestY: number;
   #tells: TellMotion = STILL_MOTION;
+  #composingWanted = false;
+  #composing = 0;
+  #composeBreath = 0;
   #handShift = new Vector3();
 
   constructor(readonly seatIndex: number) {
@@ -263,6 +290,21 @@ export class Avatar {
    */
   setTells(motion: TellMotion): void {
     this.#tells = motion;
+  }
+
+  /** Whether they are visibly steadying themselves. One bit, from the broadcast. */
+  setComposing(composing: boolean): void {
+    this.#composingWanted = composing;
+  }
+
+  /** How far into steadying themselves this body is, 0..1. */
+  get composing(): number {
+    return this.#composing;
+  }
+
+  /** How far the head is pitched from level, in radians. Negative is down. */
+  get headPitch(): number {
+    return this.#head.rotation.x;
   }
 
   /** Hides what the player would be looking through rather than at. */
@@ -354,19 +396,33 @@ export class Avatar {
     this.#headPitch += limit((this.#targetHeadPitch - this.#headPitch) * ease, most);
 
     const tells = this.#tells;
+
+    // Settling in is slower than coming out of it: a person composes
+    // themselves deliberately and is startled out of it in an instant.
+    const settle = this.#composingWanted ? COMPOSING.easeIn : COMPOSING.easeOut;
+    this.#composing += ((this.#composingWanted ? 1 : 0) - this.#composing) * (1 - Math.exp(-delta / settle));
+    if (this.#composing < 1e-3 && !this.#composingWanted) this.#composing = 0;
+    const c = this.#composing;
+    this.#composeBreath = c > 0 ? (this.#composeBreath + (delta * COMPOSING.breathsPerMinute) / 60) % 1 : 0;
+
     this.#head.rotation.order = 'YXZ';
-    this.#head.rotation.y = this.#headYaw + tells.head.yaw;
-    this.#head.rotation.x = this.#headPitch + tells.head.pitch;
+    this.#head.rotation.y = (this.#headYaw + tells.head.yaw) * (1 - COMPOSING.faceForward * c);
+    this.#head.rotation.x = this.#headPitch + tells.head.pitch - COMPOSING.bow * c;
 
     // A breath lifts the shoulders and the head on them, and the chest swells
     // a little. The arms ride up with the shoulders and the hands stay where
     // they are — the IK below starts from wherever the shoulder is now.
-    this.#head.position.y = NECK_PIVOT.y + tells.breath;
-    this.#shoulders.position.y = this.#shouldersRestY + tells.breath;
-    this.#torso.scale.set(1 + tells.breath * 1.2, 1 + tells.breath * 1.6, 1 + tells.breath * 2.4);
+    //
+    // Composing takes the breath over: one slow, deep, deliberate breath in
+    // place of whatever the tells were doing to it.
+    const slow = COMPOSING.breathMetres * 0.5 * (1 - Math.cos(this.#composeBreath * Math.PI * 2));
+    const breath = tells.breath + (slow - tells.breath) * c;
+    this.#head.position.y = NECK_PIVOT.y + breath;
+    this.#shoulders.position.y = this.#shouldersRestY + breath;
+    this.#torso.scale.set(1 + breath * 1.2, 1 + breath * 1.6, 1 + breath * 2.4);
     for (const arm of this.#arms) {
-      arm.upper.position.y = arm.shoulderRest.y + tells.breath;
-      arm.shoulder.y = arm.shoulderRest.y + tells.breath;
+      arm.upper.position.y = arm.shoulderRest.y + breath;
+      arm.shoulder.y = arm.shoulderRest.y + breath;
     }
     this.#applySweat(tells.sweat);
 
