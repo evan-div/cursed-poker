@@ -2,7 +2,7 @@
   "name": "cursed-poker",
   "private": true,
   "version": "0.0.0",
-  "description": "Horror Texas Hold'em \u2014 last-man-standing supernatural poker for 4-6 players.",
+  "description": "Horror Texas Hold'em — last-man-standing supernatural poker for 4-6 players.",
   "type": "module",
   "workspaces": [
     "shared",
@@ -29,11 +29,11 @@
     "playwright": "^1.62.1",
     "tsx": "^4.23.13",
     "typescript": "^5.7.2",
-    "vitest": "^3.2.7"
+    "vitest": "^5.1.0"
   },
   "dependencies": {
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   }
 }
