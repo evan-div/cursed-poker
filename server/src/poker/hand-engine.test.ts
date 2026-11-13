@@ -222,6 +222,42 @@ describe('reopening the betting', () => {
     expect(d.legal(3).minRaiseTo).toBe(2_200);
   });
 
+  it('reopens when several short all-ins add up to a full raise', () => {
+    // The tournament rule's own illustration, at this table's blinds: neither
+    // all-in is a raise by itself, but the player they come back round to is
+    // facing a full one, and what reopens the betting is what you are facing.
+    const d = new HandDriver({
+      handNumber: 1,
+      seats: seats([0, 10_000], [1, 10_000], [2, 225], [3, 10_000], [4, 300]),
+      buttonSeat: 0,
+      seatCount: 6,
+      config: BLINDS,
+      rng: new SeededRandomSource(11),
+    });
+    // Everybody limps: 100 each, so seat 2 has 125 behind and seat 4 has 200.
+    d.act({ type: 'CALL' }, 3).act({ type: 'CALL' }, 4).act({ type: 'CALL' }, 0);
+    d.act({ type: 'CALL' }, 1).act({ type: 'CHECK' }, 2);
+    expect(d.state.phase).toBe('FLOP');
+
+    d.act({ type: 'BET', to: 100 }, 1);
+    d.act({ type: 'ALL_IN' }, 2); // 125: 25 more, not a raise
+    d.act({ type: 'CALL' }, 3);
+    d.act({ type: 'ALL_IN' }, 4); // 200: 75 more, not a raise either
+    d.act({ type: 'CALL' }, 0);
+
+    // Back to the bettor, who put in 100 and now faces 200: a full raise.
+    expect(d.acting).toBe(1);
+    expect(d.legal(1).callAmount).toBe(100);
+    expect(d.legal(1).canRaise).toBe(true);
+    expect(d.legal(1).minRaiseTo).toBe(300);
+
+    // The caller in between put in 125 and faces only 75 more: still closed.
+    d.act({ type: 'CALL' }, 1);
+    expect(d.acting).toBe(3);
+    expect(d.legal(3).callAmount).toBe(75);
+    expect(d.legal(3).canRaise).toBe(false);
+  });
+
   it('turns a shove into a call when raise rights are closed', () => {
     const d = new HandDriver({
       handNumber: 1,

@@ -394,8 +394,20 @@ function applyResolved(state: HandState, seat: HandSeatState, action: ResolvedAc
           other.mayRaise = true;
         } else {
           // An all-in short of a full raise does not reopen the action for
-          // anyone who already acted at this level: they may only call or fold.
-          if (other.hasActedThisRound) other.mayRaise = false;
+          // anyone who already acted — unless what they are now *facing* has
+          // grown to a full raise anyway. Two short all-ins of 25 and 75 over
+          // a bet of 100 are neither of them a raise, but the bettor they come
+          // back round to is looking at 100 more, and that is one: the rule is
+          // about what a player faces when the action returns, not about any
+          // single wager on the way there.
+          //
+          // `!other.mayRaise` is a seat that acted, was then closed out by an
+          // earlier short all-in and has not answered it yet; it is measured
+          // the same way. A seat that has not acted at all since the last full
+          // raise keeps the rights it never used.
+          if (other.hasActedThisRound || !other.mayRaise) {
+            other.mayRaise = action.to - other.betThisRound >= state.lastFullRaiseSize;
+          }
           other.hasActedThisRound = false;
         }
       }
