@@ -44,6 +44,10 @@ function material(): MeshStandardMaterial {
   const atlas = cardAtlasTexture();
   sharedMaterial = new MeshStandardMaterial({
     map: atlas,
+    // Held back from white. The lamp is directly overhead and strong, and card
+    // stock at full value burned out under it: the pips went pale and a red
+    // suit came out the colour of salmon.
+    color: 0x8f8f8f,
     roughness: 0.62,
     metalness: 0,
     /**
@@ -63,7 +67,11 @@ function material(): MeshStandardMaterial {
      */
     emissive: 0xffffff,
     emissiveMap: atlas,
-    emissiveIntensity: 0.34,
+    emissiveIntensity: 0.2,
+    // The atlas is painted with rounded corners on a clear ground; this is what
+    // cuts the card out along them. A test rather than blending, so a card
+    // still writes depth and still casts a shadow the shape of a card.
+    alphaTest: 0.5,
   });
   return sharedMaterial;
 }

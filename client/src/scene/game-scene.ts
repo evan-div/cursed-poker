@@ -17,6 +17,9 @@ import type {
   SelfFrame,
 } from '@cursed/shared';
 import { buildRoom, type Room } from './table.js';
+import { dressMaterials } from './materials.js';
+import { createLens, type Lens } from './post.js';
+import { Governor, pinnedDetail, type Detail } from './quality.js';
 import { cuesFor, dealerRiseCue } from '../audio/cues.js';
 import { SILENT_ROOM, startRoomAudio, type RoomAudio } from '../audio/engine.js';
 import { SeatedCamera } from './seated-camera.js';
@@ -102,6 +105,14 @@ export class GameScene {
   /** Your own body, felt from the inside. See `feel/pulse.ts`. */
   #pulse = new Pulse({ reducedMotion: prefersReducedMotion() });
   #motionQuery: MediaQueryList | null = null;
+  /** The lens the room is drawn through, on machines that can afford one. */
+  #lens: Lens | null = null;
+  #detail: Detail = 'high';
+  /** Watches frame times and steps the room down once if they are too long. */
+  #governor: Governor | null = null;
+  /** The room's dread as last broadcast, or as pinned by a development hook. */
+  #dread = 0;
+  #forcedDread: number | null = null;
   #onMotionChange = (event: MediaQueryListEvent) => {
     this.#pulse.reducedMotion = event.matches;
   };
@@ -130,16 +141,20 @@ export class GameScene {
     });
 
     this.renderer = new WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    // Capped: a 3x retina display would otherwise quadruple the pixel cost for
-    // a scene whose whole point is that most of it is dark.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.95;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
+    // Counted per frame rather than per draw, so a frame drawn in several
+    // passes reports all of them. See `stats`.
+    this.renderer.info.autoReset = false;
 
     this.scene.background = new Color(0x070605);
+    // Surfaces are painted once, here, where there is a canvas to paint on.
+    // Surfaces are painted in the background, starting when the page loads —
+    // see `dressMaterials`. This is for the case where nothing started it.
+    void dressMaterials();
     this.#room = buildRoom(this.scene);
     this.scene.add(this.#dealer.group, buildTrophyTray(), this.#cards.group, this.#chips.group);
 
@@ -238,6 +253,26 @@ export class GameScene {
         return { ...this.#pulse.felt, reported: this.#pulse.reported, gaze: this.seated.gaze };
       };
 
+      // Pins the room's dread, for looking at the end of the evening without
+      // playing one: `__dread(0.9)`, and `__dread(null)` to hand it back.
+      (window as unknown as { __dread?: unknown }).__dread = (level?: number | null) => {
+        if (level !== undefined) {
+          this.#forcedDread = level;
+          if (level !== null) {
+            this.#dread = level;
+            this.#room.setDread(level);
+            this.#audio.setDread(level);
+          }
+        }
+        return this.#dread;
+      };
+
+      // Reads or sets the quality tier: `__quality('low')`.
+      (window as unknown as { __quality?: unknown }).__quality = (detail?: Detail) => {
+        if (detail === 'high' || detail === 'low') this.setDetail(detail);
+        return this.#detail;
+      };
+
       (window as unknown as { __freeLook?: unknown }).__freeLook = (
         x: number,
         y: number,
@@ -252,6 +287,12 @@ export class GameScene {
         this.#free = { x, y, z, at: at ?? [0, 0.8, 0] };
       };
     }
+
+    // A tier somebody asked for by name is kept; otherwise start at the top and
+    // let the governor find out whether this machine agrees.
+    const pinned = pinnedDetail();
+    this.#governor = pinned ? null : new Governor();
+    this.setDetail(pinned ?? 'high');
 
     this.#resize();
     this.#resizeObserver = new ResizeObserver(() => this.#resize());
@@ -319,9 +360,10 @@ export class GameScene {
     // decided here — see `dealer.ts`. The room's dread rides along with him
     // because lighting that differed between two players would make them
     // disagree about what they had just watched.
-    this.#dealer.apply(frame.dealer, frame.dread, frame.serverTime);
-    this.#room.setDread(frame.dread);
-    this.#audio.setDread(frame.dread);
+    this.#dread = this.#forcedDread ?? frame.dread;
+    this.#dealer.apply(frame.dealer, this.#dread, frame.serverTime);
+    this.#room.setDread(this.#dread);
+    this.#audio.setDread(this.#dread);
 
     // Standing is the one thing he does that has a sound, and it is heard once
     // — on the tick the posture changes, not on every tick he spends upright.
@@ -451,22 +493,76 @@ export class GameScene {
     this.#motionQuery?.removeEventListener?.('change', this.#onMotionChange);
     this.peek.detach();
     this.seated.detach();
+    this.#lens?.dispose();
+    this.#lens = null;
+    // The room's sound goes with the room. It used to be left running: an
+    // audio context nobody could hear, held for as long as the page was open.
+    void this.#audio.close();
+    this.#audio = SILENT_ROOM;
     this.renderer.dispose();
   }
 
-  /** Live counters, so the performance budget is something we can watch. */
-  stats(): { drawCalls: number; triangles: number; programs: number } {
+  /**
+   * Live counters, so the performance budget is something we can watch.
+   *
+   * For the whole of the last frame: the shadow pass, the room, and whatever
+   * the lens drew on top.
+   */
+  stats(): { drawCalls: number; triangles: number; programs: number; detail: Detail; frameMs: number } {
     const info = this.renderer.info;
     return {
       drawCalls: info.render.calls,
       triangles: info.render.triangles,
       programs: info.programs?.length ?? 0,
+      detail: this.#detail,
+      frameMs: Math.round((this.#governor?.averageMs ?? 0) * 10) / 10,
     };
   }
 
+  get detail(): Detail {
+    return this.#detail;
+  }
+
+  /**
+   * Sets how much the room is allowed to cost. See `quality.ts`.
+   *
+   * `high` draws through the lens at up to twice the screen's pixels; `low`
+   * draws straight to the screen at one, and the room gives up its lit air and
+   * its candles' light.
+   */
+  setDetail(detail: Detail): void {
+    this.#detail = detail;
+    this.#room.setDetail(detail);
+    // Capped: a 3x retina display would otherwise quadruple the pixel cost for
+    // a scene whose whole point is that most of it is dark.
+    this.renderer.setPixelRatio(detail === 'high' ? Math.min(window.devicePixelRatio, 2) : 1);
+
+    if (detail === 'high' && !this.#lens) {
+      try {
+        this.#lens = createLens(this.renderer);
+      } catch {
+        // No float render targets, or no room for them. The room without a
+        // lens is still the room.
+        this.#lens = null;
+      }
+    } else if (detail === 'low' && this.#lens) {
+      this.#lens.dispose();
+      this.#lens = null;
+    }
+    this.#resize();
+  }
+
   #frame(now: number): void {
-    const delta = Math.min((now - this.#lastFrame) / 1000, 0.1);
+    const elapsed = now - this.#lastFrame;
+    const delta = Math.min(elapsed / 1000, 0.1);
     this.#lastFrame = now;
+    this.renderer.info.reset();
+
+    // A machine that cannot hold the frame rate gives up the lens, once.
+    if (this.#governor?.frame(elapsed)) {
+      console.info('[cursed-poker] frames are slow here; drawing the room more cheaply');
+      this.setDetail('low');
+    }
 
     // The body first, because everything after it is seen through it.
     for (const sound of this.#pulse.update(delta)) {
@@ -498,7 +594,13 @@ export class GameScene {
     } else {
       this.seated.update(delta, now);
     }
-    this.renderer.render(this.scene, this.seated.camera);
+    if (this.#lens) {
+      // The room's mood and the player's own, both already here: see `post.ts`.
+      this.#lens.setMood(this.#dread, felt.tunnel);
+      this.#lens.render(this.scene, this.seated.camera, delta);
+    } else {
+      this.renderer.render(this.scene, this.seated.camera);
+    }
     this.onFrame?.(delta);
   }
 
@@ -513,7 +615,9 @@ export class GameScene {
     const height = parent?.clientHeight ?? window.innerHeight;
     if (width === 0 || height === 0) return;
     this.renderer.setSize(width, height, false);
+    this.#lens?.setSize(width, height, this.renderer.getPixelRatio());
     this.seated.setAspect(width / height);
+    this.#room.setViewport(height * this.renderer.getPixelRatio(), this.seated.camera.fov);
   }
 }
 

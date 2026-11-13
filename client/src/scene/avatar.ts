@@ -6,10 +6,8 @@ import {
   Mesh,
   MeshStandardMaterial,
   Quaternion,
-  SphereGeometry,
   Vector3,
 } from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { GAZE_AWAY, type GazeTarget } from '@cursed/shared';
 import { MATERIALS } from './materials.js';
 import {
@@ -22,6 +20,19 @@ import {
 } from './layout.js';
 import { buildHand, jointTowards, segment, type HandParts } from './body.js';
 import { roundedBox } from './shapes.js';
+import {
+  GARMENT,
+  beadGeometry,
+  coatMaterial,
+  collar,
+  cuffMaterial,
+  headDressing,
+  headGeometry,
+  lookFor,
+  shoulderGeometry,
+  torsoGeometry,
+  type Look,
+} from './figure.js';
 import { gazePoint } from './gaze.js';
 import { gripPose, shieldPose, type Grip } from './hold.js';
 import { solveArm } from './ik.js';
@@ -30,11 +41,15 @@ import { STILL_MOTION, type Offset, type TellMotion } from './tells.js';
 /**
  * A person at the table.
  *
- * Low-poly and blocky on purpose: the horror in this game comes from behaviour,
- * not from fidelity, and a stylised body reads its own trembling far more
- * clearly than a detailed one would. What matters here is that the anatomy is
- * *complete* — head, torso, arms, hands, and five separate fingers per hand —
- * because every later phase hangs something off one of those parts.
+ * Stylised on purpose: the horror in this game comes from behaviour, not from
+ * fidelity, and a simple body reads its own trembling far more clearly than a
+ * detailed one would. What matters here is that the anatomy is *complete* —
+ * head, torso, arms, hands, and five separate fingers per hand — because every
+ * later phase hangs something off one of those parts.
+ *
+ * Stylised is not the same as anonymous, though. Each seat has its own look —
+ * a face with a brow and a nose under it, hair, a coat, a collar — sculpted in
+ * `figure.ts`. Six people at a table should be six people.
  *
  * The local player's own head is hidden. You are inside it.
  *
@@ -58,8 +73,6 @@ import { STILL_MOTION, type Offset, type TellMotion } from './tells.js';
  * they shake as much as they shook, because the table should see somebody
  * *trying* to settle shaking hands, not hands that already have.
  */
-
-const CLOTH = [MATERIALS.cloth, MATERIALS.clothAlt, MATERIALS.clothThird];
 
 /**
  * What sweat does to skin.
@@ -95,21 +108,6 @@ const COMPOSING = {
   easeIn: 0.7,
   easeOut: 0.45,
 } as const;
-
-/** Where beads of sweat sit on a skull, in the skull's own space. Front is +Z. */
-const BEADS: readonly [number, number, number][] = [
-  // The brow, low enough to be on the flat of the face rather than on the
-  // rounded edge where it turns away from the light.
-  [-0.042, 0.038, 0.096],
-  [-0.008, 0.046, 0.097],
-  [0.03, 0.034, 0.096],
-  [0.052, 0.05, 0.095],
-  // Temples, which catch the lamp from the side.
-  [-0.084, 0.018, 0.07],
-  [0.085, 0.006, 0.066],
-  // One on its way down.
-  [-0.06, -0.012, 0.095],
-];
 
 /** The fastest a neck turns, in radians per second. */
 const MAX_HEAD_TURN_PER_SECOND = 2.6;
@@ -211,10 +209,14 @@ export class Avatar {
     this.group.position.set(at.x, 0, at.z);
     this.group.rotation.y = facingCentreYaw(station);
 
-    const cloth = CLOTH[seatIndex % CLOTH.length]!;
+    const look = lookFor(seatIndex);
+    const cloth = coatMaterial(look);
     // A clone per body, so one player's sweat is not everybody's. Same shader,
-    // so it costs uniforms rather than a program.
+    // so it costs uniforms rather than a program. Its own colour too: nobody at
+    // this table is the same shade as their neighbour.
     this.#skin = MATERIALS.skin.clone();
+    this.#skin.color.set(look.skin);
+    this.#skin.emissive.set(look.skin);
     this.#skinBase = this.#skin.color.clone();
 
     this.#body = new Group();
@@ -226,7 +228,9 @@ export class Avatar {
     hips.position.set(0, 0.5, -0.04);
     hips.castShadow = true;
 
-    const torso = new Mesh(roundedBox(0.38, 0.46, 0.24), cloth);
+    // The coat, the shirt in its V and whatever is at the throat are one mesh,
+    // coloured by vertex. See `torsoGeometry`.
+    const torso = new Mesh(torsoGeometry(look), GARMENT);
     torso.position.set(0, 0.82, 0.01);
     torso.rotation.x = -0.09;
     torso.castShadow = true;
@@ -234,15 +238,19 @@ export class Avatar {
     // Shoulders. Without them the head floats: a lit face over a dark torso
     // with a thin neck between reads as a severed one, which is the right
     // effect for entirely the wrong reason.
-    const shoulders = new Mesh(roundedBox(0.42, 0.13, 0.23), cloth);
+    const shoulders = new Mesh(shoulderGeometry(look), GARMENT);
     shoulders.position.set(0, 1.0, 0.0);
     shoulders.castShadow = true;
+    // The collar hangs off the shoulders, so it rides up with them on a breath.
+    const neckband = collar(look);
+    neckband.position.set(0, 0.058, 0.004);
+    shoulders.add(neckband);
 
     this.#torso = torso;
     this.#torsoRestX = torso.rotation.x;
     this.#shoulders = shoulders;
     this.#shouldersRestY = shoulders.position.y;
-    this.#body.add(hips, torso, shoulders, this.#buildArm(-1, cloth), this.#buildArm(1, cloth));
+    this.#body.add(hips, torso, shoulders, this.#buildArm(-1, cloth, look), this.#buildArm(1, cloth, look));
 
     // The head group's origin IS the pivot, which has to be at the neck.
     //
@@ -260,25 +268,20 @@ export class Avatar {
     // A squashed sphere is the obvious way to round off a cube of a head and it
     // is wrong, because a sphere tapers to a point at its bottom pole. The jaw
     // narrows to nothing right where it meets the neck, so the lower quarter of
-    // the head reads as *more neck* — and with only four and a half centimetres
-    // of neck actually showing, that trebles it. Every player at the table
-    // turned into a lollipop on a stalk. A rounded box keeps its width down to
-    // the jaw, which is the whole job.
-    const skull = new Mesh(roundedBox(0.165, 0.2, 0.185), this.#skin);
+    // the head reads as *more neck*. It was a rounded box for a long time for
+    // exactly that reason. It is a sculpt now — see `headPoint` — which keeps
+    // its width down to a jaw with corners, and has a face on the front of it.
+    const skull = new Mesh(headGeometry(), this.#skin);
     skull.position.set(0, 1.21 - NECK_PIVOT.y, 0.02 - NECK_PIVOT.z);
     skull.castShadow = true;
     this.#skull = skull;
 
     // One mesh for every bead, so a soaked player costs one draw call and a
     // dry one costs none.
-    this.#beads = new Mesh(
-      mergeGeometries(
-        BEADS.map(([x, y, z]) => new SphereGeometry(0.007, 6, 4).scale(1, 1.3, 0.7).translate(x, y, z)),
-      )!,
-      MATERIALS.sweat,
-    );
+    this.#beads = new Mesh(beadGeometry(), MATERIALS.sweat);
     this.#beads.visible = false;
-    skull.add(this.#beads);
+    // Hair, eyes, and anything else this seat's look puts on a head.
+    skull.add(this.#beads, headDressing(look));
     this.#head.add(neck, skull);
   }
 
@@ -661,7 +664,7 @@ export class Avatar {
     if (target) target.visible = false;
   }
 
-  #buildArm(side: -1 | 1, cloth: (typeof CLOTH)[number]): Group {
+  #buildArm(side: -1 | 1, cloth: MeshStandardMaterial, look: Look): Group {
     const shoulderAt = new Vector3(side * 0.19, 1.0, 0.0);
     const elbowAt = new Vector3(side * 0.24, 0.82, 0.19);
     // Hands rest on the felt, a little in from the rail.
@@ -690,6 +693,12 @@ export class Avatar {
     // Sleeved, not bare. Six pairs of bare forearms lying in the one lit part
     // of the room turn the whole table the colour of skin.
     forearm.joint.add(segment(forearm.length, 0.085, 0.085, cloth));
+    // A cuff: a finger's width of shirt between the sleeve and the wrist. It
+    // is the nearest thing to a player's own eyes that says they are dressed.
+    const cuff = new Mesh(CUFF, cuffMaterial(look));
+    cuff.rotation.x = Math.PI / 2;
+    cuff.position.z = forearm.length - 0.006;
+    forearm.joint.add(cuff);
     elbow.add(forearm.joint);
 
     const wrist = new Group();
@@ -743,6 +752,9 @@ function limit(value: number, most: number): number {
 
 /** A hand's own +Z, which is the way its fingers point. */
 const FORWARD = new Vector3(0, 0, 1);
+
+/** One cuff's worth of shirt, shared by every wrist at the table. */
+const CUFF = new CylinderGeometry(0.036, 0.039, 0.024, 14);
 
 /**
  * Where the pinch is inside a hand, in the hand's own axes.

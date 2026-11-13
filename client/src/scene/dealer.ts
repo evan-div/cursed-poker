@@ -1,17 +1,22 @@
 import {
   CylinderGeometry,
   Group,
+  LatheGeometry,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   SphereGeometry,
+  Vector2,
   Vector3,
+  type BufferAttribute,
+  type BufferGeometry,
 } from 'three';
 import { DEALER, GAZE_AWAY, blend, type DealerPresence, type GazeTarget } from '@cursed/shared';
 import { MATERIALS } from './materials.js';
 import { DEALER_STATION, RADIUS, TABLE, clamp, facingCentreYaw, stationPoint } from './layout.js';
 import { buildHand, jointTowards, segment, type HandParts } from './body.js';
 import { gazePoint } from './gaze.js';
-import { roundedBox } from './shapes.js';
+import { fuse, roundedBox } from './shapes.js';
 
 /**
  * The Dealer.
@@ -82,11 +87,24 @@ const SIZE = {
   shoulderRadius: 0.24,
   /** Where the head is hinged. */
   neck: 1.52,
-  hoodRadius: 0.17,
-  hoodPeak: 0.05,
-  hoodHeight: 0.3,
-  hollowRadius: 0.13,
+  /** Half the cowl: across, tall, front to back. */
+  hood: { x: 0.168, y: 0.2, z: 0.19 },
+  hollowRadius: 0.12,
 } as const;
+
+/**
+ * What is inside the hood.
+ *
+ * Not a dark material: no material. It takes no light, throws no highlight and
+ * has no shape, which under a lamp this strong is the only way to get black.
+ * The fog still reaches it, so it sits in the room rather than on the screen.
+ */
+const VOID = new MeshBasicMaterial({ color: 0x000000 });
+
+const smoothstep = (edge0: number, edge1: number, x: number): number => {
+  const t = Math.min(Math.max((x - edge0) / (edge1 - edge0), 0), 1);
+  return t * t * (3 - 2 * t);
+};
 
 /** Where his head is hinged, in his own space. */
 const NECK_PIVOT = { y: SIZE.neck, z: 0.02 } as const;
@@ -99,8 +117,13 @@ const RISE_HEIGHT = 0.3;
  *
  * The one thing about him that changes with the room rather than with what he
  * is doing, so it reads as the room getting worse rather than as him reacting.
+ *
+ * The numbers are large because they are measured against the lens: red is a
+ * dim colour to a bloom filter, and at the start of the evening these sit under
+ * its threshold — two points, and nothing round them. By the end they are far
+ * over it and they flare. See `BLOOM` in `post.ts`.
  */
-const EYE_GLOW = { calm: 3, dread: 11 } as const;
+const EYE_GLOW = { calm: 5, dread: 95 } as const;
 
 /** How far he bends over the felt when he leans, in radians. */
 const LEAN_ANGLE = 0.3;
@@ -250,10 +273,39 @@ export class Dealer {
 
   #buildRobe(): Mesh {
     // A column, not a person: no legs, nothing that suggests how he stands.
-    const body = new Mesh(
-      new CylinderGeometry(SIZE.robeTop, SIZE.robeHem, ROBE_HEIGHT, 36, 1, true),
-      MATERIALS.robe,
+    // Turned on a lathe like the table leg, and then spoiled — heavy cloth
+    // hangs in folds that deepen toward the floor, and this hem has been
+    // dragged over a great many floors.
+    const geometry = new LatheGeometry(
+      [
+        new Vector2(SIZE.robeHem, 0),
+        new Vector2(SIZE.robeHem - 0.025, 0.14),
+        new Vector2(0.295, 0.46),
+        new Vector2(0.252, 0.9),
+        new Vector2(0.226, 1.24),
+        new Vector2(SIZE.robeTop, ROBE_HEIGHT),
+      ],
+      84,
     );
+    const position = geometry.getAttribute('position') as BufferAttribute;
+    for (let i = 0; i < position.count; i++) {
+      const x = position.getX(i);
+      const y = position.getY(i);
+      const z = position.getZ(i);
+      const radius = Math.hypot(x, z);
+      const angle = Math.atan2(x, z);
+      const low = Math.pow(1 - y / ROBE_HEIGHT, 1.3);
+      // Whole numbers of folds, so the column closes on itself.
+      const fold = (Math.sin(angle * 13 + Math.sin(angle * 3) * 1.4) * 0.022 + Math.sin(angle * 31) * 0.005) * low;
+      const scale = (radius + fold) / radius;
+      // The hem: torn up in places, and still on the floor in others.
+      const torn = y < 1e-4 ? Math.pow(Math.max(0, Math.sin(angle * 17 + 1.1) * Math.sin(angle * 5 + 0.4)), 2) * 0.075 : 0;
+      position.setXYZ(i, x * scale, y + torn, z * scale);
+    }
+    geometry.translate(0, -ROBE_HEIGHT / 2, 0);
+    geometry.computeVertexNormals();
+
+    const body = new Mesh(geometry, MATERIALS.robe);
     body.position.y = ROBE_HEIGHT / 2;
     body.castShadow = true;
     this.#robe = body;
@@ -261,8 +313,41 @@ export class Dealer {
   }
 
   #buildShoulders(): Mesh {
-    const shoulders = new Mesh(new SphereGeometry(SIZE.shoulderRadius, 20, 12), MATERIALS.robe);
-    shoulders.scale.set(1, 0.42, 0.8);
+    // Shoulders, and a mantle over them: a short cape that hides where the arms
+    // begin, so they simply come out of him.
+    const mantle = new LatheGeometry(
+      [
+        new Vector2(0.282, -0.31),
+        new Vector2(0.288, -0.17),
+        new Vector2(0.25, -0.03),
+        new Vector2(0.17, 0.07),
+        new Vector2(0.09, 0.125),
+      ],
+      56,
+    );
+    const position = mantle.getAttribute('position') as BufferAttribute;
+    for (let i = 0; i < position.count; i++) {
+      const x = position.getX(i);
+      const y = position.getY(i);
+      const z = position.getZ(i);
+      const radius = Math.hypot(x, z);
+      const angle = Math.atan2(x, z);
+      const low = smoothstep(0.1, -0.31, y);
+      const fold = Math.sin(angle * 11 + 0.7) * 0.012 * low;
+      const torn = y < -0.3 ? Math.pow(Math.max(0, Math.sin(angle * 7 + 2.1)), 3) * 0.05 : 0;
+      const scale = (radius + fold) / radius;
+      // Narrower front to back than side to side, as shoulders are.
+      position.setXYZ(i, x * scale, y + torn, z * scale * 0.78);
+    }
+    mantle.computeVertexNormals();
+
+    const shoulders = new Mesh(
+      fuse([
+        { geometry: new SphereGeometry(SIZE.shoulderRadius, 20, 12), scale: [1, 0.42, 0.8] },
+        { geometry: mantle },
+      ]),
+      MATERIALS.robe,
+    );
     shoulders.position.y = SIZE.robeHeight;
     shoulders.castShadow = true;
     return shoulders;
@@ -273,33 +358,25 @@ export class Dealer {
     // lesson the avatars' heads taught by sailing off across the room.
     this.#head.position.set(0, NECK_PIVOT.y, NECK_PIVOT.z);
 
-    // The hood is a cone with the point up, so the face is a shadowed hollow
-    // rather than a shape you can resolve. Everything below is an offset from
-    // the neck, which is where this group's origin is — the numbers used to be
-    // written as absolute heights with the pivot subtracted back out, which
-    // worked and made moving him a puzzle.
-    const hood = new Mesh(
-      new CylinderGeometry(SIZE.hoodPeak, SIZE.hoodRadius, SIZE.hoodHeight, 32, 1, true),
-      MATERIALS.robe,
-    );
-    hood.position.y = 0.09;
+    // A cowl: deep, peaked at the back, its brow pulled forward over an
+    // opening with nothing in it. It was a cone with the point up, and read as
+    // one; this is cut from a sphere and then hung, the way a hood is.
+    const hood = new Mesh(hoodGeometry(), MATERIALS.robe);
+    hood.position.y = 0.07;
     hood.castShadow = true;
 
-    const crown = new Mesh(new SphereGeometry(0.055, 14, 10), MATERIALS.robe);
-    crown.position.y = 0.24;
-
     // Whatever the hood contains does not take light.
-    const hollow = new Mesh(new SphereGeometry(SIZE.hollowRadius, 18, 14), MATERIALS.hoodVoid);
-    hollow.scale.set(1, 1, 0.75);
-    hollow.position.set(0, 0.05, 0.03);
+    const hollow = new Mesh(new SphereGeometry(SIZE.hollowRadius, 18, 14), VOID);
+    hollow.scale.set(1, 1.08, 0.7);
+    hollow.position.set(0, 0.055, 0.02);
 
-    this.#head.add(hood, crown, hollow);
+    this.#head.add(hood, hollow);
 
     for (const side of [-1, 1]) {
       // Their own material each, so their glow can be turned up without
       // lighting every other emissive thing in the room with it.
-      const eye = new Mesh(new SphereGeometry(0.011, 10, 8), MATERIALS.eye.clone());
-      eye.position.set(side * 0.036, 0.05, 0.112);
+      const eye = new Mesh(new SphereGeometry(0.0095, 10, 8), MATERIALS.eye.clone());
+      eye.position.set(side * 0.036, 0.05, 0.106);
       this.#head.add(eye);
       this.eyes.push(eye);
     }
@@ -323,6 +400,11 @@ export class Dealer {
       .applyQuaternion(upper.joint.quaternion.clone().invert());
     const forearm = jointTowards(new Vector3(), toWrist);
     forearm.joint.add(segment(forearm.length, 0.085, 0.085, MATERIALS.robe));
+    // A sleeve that opens toward the wrist, wide enough to lose a hand in.
+    const sleeve = new Mesh(SLEEVE, MATERIALS.robe);
+    sleeve.position.z = forearm.length - 0.075;
+    sleeve.castShadow = true;
+    forearm.joint.add(sleeve);
     elbow.add(forearm.joint);
 
     const wrist = new Group();
@@ -330,7 +412,9 @@ export class Dealer {
     forearm.joint.add(wrist);
 
     const hand = buildHand({
-      material: MATERIALS.robe,
+      // Not gloved, and not skin. The one pale thing about him, and it is on
+      // the felt in front of everybody all evening.
+      material: MATERIALS.bone,
       palm: [0.075, 0.026, 0.082],
       // Half again as long as a person's, and thinner.
       fingerLength: 0.095,
@@ -353,6 +437,57 @@ export class Dealer {
     this.#arms.push(pivot);
     return pivot;
   }
+}
+
+/** A bell sleeve: narrow at the elbow end, open at the wrist. Runs along +Z. */
+const SLEEVE = new CylinderGeometry(0.078, 0.042, 0.17, 16, 1, true).rotateX(Math.PI / 2);
+
+let hoodCache: BufferGeometry | null = null;
+
+/**
+ * The cowl.
+ *
+ * A sphere, pushed: pulled up and back into a peak, drawn forward at the brow,
+ * let out below the chin where it lies on his shoulders — and then opened at
+ * the front, by leaving out the triangles a face would be behind.
+ */
+function hoodGeometry(): BufferGeometry {
+  if (hoodCache) return hoodCache;
+
+  const geometry = new SphereGeometry(1, 44, 32);
+  const position = geometry.getAttribute('position') as BufferAttribute;
+  const open: boolean[] = [];
+  for (let i = 0; i < position.count; i++) {
+    const x = position.getX(i);
+    const y = position.getY(i);
+    const z = position.getZ(i);
+
+    // The opening: an oval, taller than it is wide, a little below the middle.
+    open.push(z > 0 && (x / 0.56) ** 2 + ((y + 0.14) / 0.56) ** 2 < 1);
+
+    const peak = smoothstep(0.15, 1, y) * smoothstep(0.35, -0.7, z);
+    const brow = Math.exp(-(((y - 0.44) / 0.3) ** 2)) * smoothstep(0, 0.8, z);
+    const drape = smoothstep(-0.4, -1, y);
+    position.setXYZ(
+      i,
+      x * SIZE.hood.x * (1 + 0.55 * drape),
+      y * SIZE.hood.y + 0.07 * peak - 0.07 * drape,
+      z * SIZE.hood.z * (1 + 0.4 * drape) - 0.055 * peak + 0.045 * brow,
+    );
+  }
+
+  const index = geometry.getIndex()!;
+  const kept: number[] = [];
+  for (let i = 0; i < index.count; i += 3) {
+    const a = index.getX(i);
+    const b = index.getX(i + 1);
+    const c = index.getX(i + 2);
+    if (!(open[a] && open[b] && open[c])) kept.push(a, b, c);
+  }
+  geometry.setIndex(kept);
+  geometry.computeVertexNormals();
+  hoodCache = geometry;
+  return geometry;
 }
 
 /**

@@ -1,34 +1,22 @@
-import {
-  Color,
-  CylinderGeometry,
-  FogExp2,
-  Group,
-  HemisphereLight,
-  Mesh,
-  PlaneGeometry,
-  Object3D,
-  PointLight,
-  Scene,
-  SpotLight,
-  TorusGeometry,
-} from 'three';
-import { MATERIALS } from './materials.js';
-import { RADIUS, STATION_COUNT, TABLE, facingCentreYaw, stationPoint } from './layout.js';
-import { roundedBox } from './shapes.js';
+import { Color, FogExp2, Group, HemisphereLight, Object3D, PointLight, Scene, SpotLight } from 'three';
+import { TABLE } from './layout.js';
+import { buildChairs, buildTable } from './furniture.js';
+import { LAMP_HEIGHT, buildLamp } from './lamp.js';
+import { ROOM_HEIGHT, buildShell } from './room-shell.js';
 
 /**
- * The room and the table.
+ * The room and the table, and the light they are seen by.
  *
- * Everything is built from primitives at runtime: no models to load, nothing to
- * version, and the whole thing changes shape by editing numbers. It is a
- * placeholder in fidelity but not in layout — the dimensions are the ones the
- * rest of the game measures against, so cards, chips and hands all land where
- * they should.
+ * Everything is still built at runtime from numbers: no models to load, nothing
+ * to version, and the whole thing changes shape by editing them. What it is
+ * built *out of* lives next door — `furniture.ts` for the table and chairs,
+ * `room-shell.ts` for the walls and what hangs on them, `lamp.ts` for the shade
+ * and the air under it. This file is the lighting, and the dial that turns it.
  *
- * Lighting is deliberately thin: one shadow-casting lamp over the table and
- * almost nothing else, with heavy fog swallowing the rest. That is the Phase 3
- * budget and the Phase 5 starting point — the room should already feel like it
- * ends a few metres away.
+ * Lighting is deliberately thin: one shadow-casting lamp over the table, a
+ * breath of bounce, and two candles on the walls that will not last the
+ * evening. The room should feel like it ends where the lamp does, and then
+ * turn out not to.
  */
 
 /**
@@ -54,6 +42,16 @@ export interface Room {
   setPeering(amount: number): void;
   /** Hangs the reading light off the thing that moves with the player's eyes. */
   attachTo(camera: Object3D): void;
+  /** The drawing surface changed size, or the player leaned in. */
+  setViewport(heightPixels: number, fovDegrees: number): void;
+  /**
+   * How much the room is allowed to cost. See `quality.ts`.
+   *
+   * On `low` the shaft of lit air and the dust go, the candles and the door
+   * stop casting light and only glow, and the shadow map halves. The room keeps
+   * its shape and loses its air.
+   */
+  setDetail(detail: 'high' | 'low'): void;
   update(delta: number): void;
 }
 
@@ -71,10 +69,17 @@ const ROOM = {
   lampColour: { calm: 0xffd2a0, dread: 0xff8f63 },
   /** Half-angle of the lamp cone, in radians. */
   cone: { calm: Math.PI / 2.5, dread: Math.PI / 3.4 },
-  /** Exponential fog. Small numbers, large consequences. */
-  fog: { calm: 0.26, dread: 0.46 },
+  /**
+   * Exponential fog. Small numbers, large consequences.
+   *
+   * Thinner than it was when there was nothing out there to hide. The room has
+   * walls now, and at the start of the evening they should be findable; what
+   * takes them away later is this number rising, which is the point of having
+   * given the fog something to take.
+   */
+  fog: { calm: 0.12, dread: 0.36 },
   /** The trace of bounce that keeps faces off pure silhouette. */
-  bounce: { calm: 0.32, dread: 0.12 },
+  bounce: { calm: 0.5, dread: 0.14 },
   /** The warm fill at table height that keeps hands from going black. */
   fill: { calm: 1.5, dread: 0.75 },
   /**
@@ -108,6 +113,9 @@ const ROOM = {
  * own gesture, and there is no information in it that its owner did not already
  * have. What the *table* sees is the replicated lift, exactly as before.
  */
+/** The lamp's shadow map, by how much the room is allowed to cost. */
+const SHADOW_MAP = { high: 2048, low: 1024 } as const;
+
 const READING_LIGHT = {
   intensity: 0.85,
   /** Metres. Roughly arm's length, so the felt never sees it. */
@@ -121,22 +129,30 @@ export function buildRoom(scene: Scene): Room {
   const fog = new FogExp2(0x070605, ROOM.fog.calm);
   scene.fog = fog;
 
+  const shell = buildShell();
+  const fixture = buildLamp(ROOM_HEIGHT);
+
   const group = new Group();
-  group.add(buildFloor(), buildTable(), buildChairs());
+  group.add(shell.group, buildTable(), buildChairs(), fixture.group);
 
   // The one real light: a lamp over the felt. Its cone has to reach past the
   // rail to the people sitting at it — a tighter pool lights the hands and
   // leaves six pairs of disembodied arms in the dark, which looks like a bug
   // rather than like dread.
   const lamp = new SpotLight(ROOM.lampColour.calm, ROOM.lamp.calm, 6.5, ROOM.cone.calm, 0.45, 1.3);
-  lamp.position.set(0, 1.88, 0);
+  lamp.position.set(0, LAMP_HEIGHT - 0.02, 0);
   lamp.target.position.set(0, TABLE.surfaceHeight, 0);
   lamp.castShadow = true;
-  lamp.shadow.mapSize.set(1024, 1024);
+  lamp.shadow.mapSize.set(SHADOW_MAP.high, SHADOW_MAP.high);
   lamp.shadow.camera.near = 0.4;
-  lamp.shadow.camera.far = 4.5;
-  lamp.shadow.bias = -0.0008;
-  group.add(lamp, lamp.target, buildLampFixture());
+  lamp.shadow.camera.far = 5.5;
+  // A stack of chips is a wall three millimetres from the next wall. Offsetting
+  // along the normal as well as in depth is what stops each one shadowing
+  // itself in stripes — which is what every stack on the table used to do.
+  lamp.shadow.bias = -0.0004;
+  lamp.shadow.normalBias = 0.012;
+  lamp.shadow.radius = 2.5;
+  group.add(lamp, lamp.target);
 
   // A trace of bounce so faces are not pure silhouette. No shadows, no cost.
   const bounce = new HemisphereLight(0x2f2618, 0x090807, ROOM.bounce.calm);
@@ -181,6 +197,23 @@ export function buildRoom(scene: Scene): Room {
       camera.add(reading);
     },
 
+    setViewport(heightPixels: number, fovDegrees: number): void {
+      fixture.setViewport(heightPixels, fovDegrees);
+    },
+
+    setDetail(detail: 'high' | 'low'): void {
+      const high = detail === 'high';
+      fixture.setAir(high);
+      shell.setLit(high);
+      const size = high ? SHADOW_MAP.high : SHADOW_MAP.low;
+      if (lamp.shadow.mapSize.x !== size) {
+        lamp.shadow.mapSize.set(size, size);
+        // The map is allocated once; a new size needs a new one.
+        lamp.shadow.map?.dispose();
+        lamp.shadow.map = null;
+      }
+    },
+
     update(delta: number): void {
       // The room turns slowly. Dread itself only moves when the match does, but
       // easing the *lighting* means an elimination darkens the room over a
@@ -205,122 +238,15 @@ export function buildRoom(scene: Scene): Room {
       fill.intensity = mix(ROOM.fill.calm, ROOM.fill.dread, shown);
 
       reading.intensity = READING_LIGHT.intensity * peering;
+
+      // The candles, the door, and the air the lamp shines through all follow
+      // the same eased number, so nothing in the room turns before the rest.
+      shell.update(delta, shown);
+      fixture.update(delta, shown, lamp.color, 1 + unsteady);
     },
   };
 }
 
 function mix(calm: number, dread: number, level: number): number {
   return calm + (dread - calm) * level;
-}
-
-function buildFloor(): Mesh {
-  const floor = new Mesh(new PlaneGeometry(14, 14), MATERIALS.floor);
-  floor.rotation.x = -Math.PI / 2;
-  floor.receiveShadow = true;
-  return floor;
-}
-
-function buildTable(): Group {
-  const table = new Group();
-
-  const feltThickness = 0.03;
-  const felt = new Mesh(
-    new CylinderGeometry(TABLE.feltRadius, TABLE.feltRadius, feltThickness, 64),
-    MATERIALS.felt,
-  );
-  felt.position.y = TABLE.surfaceHeight - feltThickness / 2;
-  felt.receiveShadow = true;
-  table.add(felt);
-
-  // The padded rail players rest their arms on.
-  const railTube = (TABLE.railRadius - TABLE.feltRadius) / 2;
-  const rail = new Mesh(
-    new TorusGeometry(TABLE.feltRadius + railTube, railTube, 20, 96),
-    MATERIALS.rail,
-  );
-  rail.rotation.x = -Math.PI / 2;
-  rail.position.y = TABLE.surfaceHeight - feltThickness / 2;
-  rail.castShadow = true;
-  rail.receiveShadow = true;
-  table.add(rail);
-
-  const skirtHeight = 0.16;
-  const skirt = new Mesh(
-    new CylinderGeometry(TABLE.railRadius - 0.01, TABLE.railRadius - 0.05, skirtHeight, 64),
-    MATERIALS.wood,
-  );
-  skirt.position.y = TABLE.surfaceHeight - feltThickness - skirtHeight / 2;
-  skirt.castShadow = true;
-  table.add(skirt);
-
-  const columnHeight = TABLE.surfaceHeight - feltThickness - skirtHeight;
-  const column = new Mesh(new CylinderGeometry(0.11, 0.16, columnHeight, 40), MATERIALS.wood);
-  column.position.y = columnHeight / 2;
-  column.castShadow = true;
-  table.add(column);
-
-  const base = new Mesh(new CylinderGeometry(0.42, 0.46, 0.035, 48), MATERIALS.wood);
-  base.position.y = 0.018;
-  base.receiveShadow = true;
-  table.add(base);
-
-  return table;
-}
-
-/** One chair per station, the Dealer's included. Chairs outlive their occupants. */
-function buildChairs(): Group {
-  const chairs = new Group();
-  // One geometry each, shared across all seven chairs.
-  const seatGeometry = roundedBox(0.44, 0.05, 0.42);
-  const backGeometry = roundedBox(0.44, 0.52, 0.05);
-  const legGeometry = roundedBox(0.05, 0.44, 0.05);
-
-  for (let station = 0; station < STATION_COUNT; station++) {
-    const chair = new Group();
-    const at = stationPoint(station, RADIUS.body + 0.12, 0);
-    chair.position.set(at.x, 0, at.z);
-    chair.rotation.y = facingCentreYaw(station);
-
-    const seat = new Mesh(seatGeometry, MATERIALS.chair);
-    seat.position.y = 0.45;
-    seat.castShadow = true;
-    seat.receiveShadow = true;
-
-    const back = new Mesh(backGeometry, MATERIALS.chair);
-    back.position.set(0, 0.72, -0.19);
-    back.castShadow = true;
-
-    chair.add(seat, back);
-    for (const [x, z] of [
-      [-0.18, -0.16],
-      [0.18, -0.16],
-      [-0.18, 0.16],
-      [0.18, 0.16],
-    ] as const) {
-      const leg = new Mesh(legGeometry, MATERIALS.chair);
-      leg.position.set(x, 0.22, z);
-      chair.add(leg);
-    }
-    chairs.add(chair);
-  }
-  return chairs;
-}
-
-/** The lamp above the table: a shade, a filament, and the reason you can see. */
-function buildLampFixture(): Group {
-  const fixture = new Group();
-
-  const cord = new Mesh(new CylinderGeometry(0.004, 0.004, 1.0, 6), MATERIALS.wood);
-  cord.position.y = 2.44;
-  fixture.add(cord);
-
-  const shade = new Mesh(new CylinderGeometry(0.22, 0.1, 0.16, 40, 1, true), MATERIALS.brass);
-  shade.position.y = 1.96;
-  fixture.add(shade);
-
-  const bulb = new Mesh(new CylinderGeometry(0.12, 0.12, 0.006, 20), MATERIALS.lampGlow);
-  bulb.position.y = 1.88;
-  fixture.add(bulb);
-
-  return fixture;
 }

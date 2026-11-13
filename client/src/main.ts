@@ -10,6 +10,7 @@ import {
 import { GameConnection } from './net.js';
 import { describeEvent, type LogLine } from './narration.js';
 import { GameScene } from './scene/game-scene.js';
+import { dressMaterials } from './scene/materials.js';
 import { PresenceReporter } from './interaction/presence-reporter.js';
 import { el } from './ui/dom.js';
 import { renderLanding, renderLobby, type LobbyHandlers } from './ui/lobby.js';
@@ -402,5 +403,11 @@ setInterval(() => {
 if (import.meta.env.DEV) {
   (window as unknown as { __view?: () => ClientView | null }).__view = () => view;
 }
+
+// Paint the room while they are still typing their name. See `dressMaterials`.
+const painted = performance.now();
+void dressMaterials().then(() => {
+  if (import.meta.env.DEV) console.info(`[cursed-poker] surfaces painted in ${Math.round(performance.now() - painted)}ms`);
+});
 
 render();

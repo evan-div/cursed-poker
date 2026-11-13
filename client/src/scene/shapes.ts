@@ -1,5 +1,6 @@
-import { BufferGeometry, CapsuleGeometry } from 'three';
+import { BufferGeometry, CapsuleGeometry, Euler, Matrix4, Quaternion, Vector3 } from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 /**
  * Solids with the corners taken off.
@@ -92,4 +93,53 @@ export function bone(length: number, thickness: number): BufferGeometry {
     geometry.rotateX(Math.PI / 2);
     return geometry;
   });
+}
+
+/** One piece of something larger: a solid, and where it goes. */
+export interface Part {
+  geometry: BufferGeometry;
+  /** Position, in the space of the thing being assembled. */
+  at?: [number, number, number];
+  /** Euler rotation, XYZ order, applied before the move. */
+  turn?: [number, number, number];
+  scale?: [number, number, number];
+}
+
+const partMatrix = new Matrix4();
+const partPosition = new Vector3();
+const partRotation = new Quaternion();
+const partScale = new Vector3();
+const partEuler = new Euler();
+
+/**
+ * Welds a pile of parts into one solid.
+ *
+ * Furniture does not move. A chair built as eleven meshes is eleven draw calls
+ * and eleven matrix updates a frame for something that will sit still all
+ * evening; the same chair welded is one, and seven of them welded together are
+ * still one. The parts are copied, so shared, cached solids stay untouched.
+ */
+export function fuse(parts: readonly Part[], transform?: Matrix4): BufferGeometry {
+  const placed = parts.map((part) => {
+    // Some of three's solids are indexed and some are not, and a weld needs
+    // them all the same.
+    const copy = part.geometry.index ? part.geometry.toNonIndexed() : part.geometry.clone();
+    partEuler.set(part.turn?.[0] ?? 0, part.turn?.[1] ?? 0, part.turn?.[2] ?? 0);
+    partRotation.setFromEuler(partEuler);
+    partPosition.set(part.at?.[0] ?? 0, part.at?.[1] ?? 0, part.at?.[2] ?? 0);
+    partScale.set(part.scale?.[0] ?? 1, part.scale?.[1] ?? 1, part.scale?.[2] ?? 1);
+    partMatrix.compose(partPosition, partRotation, partScale);
+    if (transform) partMatrix.premultiply(transform);
+    copy.applyMatrix4(partMatrix);
+    // Only what every solid has. A stray extra attribute on one part is enough
+    // to make the weld refuse.
+    for (const name of Object.keys(copy.attributes)) {
+      if (name !== 'position' && name !== 'normal' && name !== 'uv') copy.deleteAttribute(name);
+    }
+    return copy;
+  });
+  const welded = mergeGeometries(placed, false);
+  for (const piece of placed) piece.dispose();
+  if (!welded) throw new Error('Could not weld parts: their attributes do not match');
+  return welded;
 }
