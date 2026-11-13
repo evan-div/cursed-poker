@@ -17,6 +17,21 @@ export interface Clock {
 export class SystemClock implements Clock {
   #handles = new Map<number, NodeJS.Timeout>();
   #nextId = 1;
+  readonly #onError: (error: unknown) => void;
+
+  /**
+   * `onError` hears about a timer callback that threw.
+   *
+   * Every match in the process runs on timers from here, and an exception
+   * escaping one is an uncaught exception: Node exits, and every other table
+   * in memory goes with it. A match whose own invariant has failed is already
+   * lost; the five beside it are not, so the failure is reported and contained
+   * rather than allowed to take the building down.
+   */
+  constructor(onError?: (error: unknown) => void) {
+    this.#onError =
+      onError ?? ((error) => console.error('[cursed-poker] a match timer threw:', error));
+  }
 
   now(): number {
     return Date.now();
@@ -26,7 +41,11 @@ export class SystemClock implements Clock {
     const id = this.#nextId++;
     const timer = setTimeout(() => {
       this.#handles.delete(id);
-      fn();
+      try {
+        fn();
+      } catch (error) {
+        this.#onError(error);
+      }
     }, ms);
     // Never hold the process open for a game timer.
     timer.unref?.();

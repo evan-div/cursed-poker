@@ -51,6 +51,12 @@ export interface GameServerOptions {
   presenceHz?: number;
   /** Where to keep each match's stress recording. See `stress-telemetry.ts`. */
   stressLogs?: StressLogSink;
+  /**
+   * Told about every failure that was the server's own fault, with the name of
+   * the message that provoked it. Defaults to the console. The client is told
+   * only that something went wrong — see `#onConnection`.
+   */
+  onInternalError?: (error: unknown, message: string) => void;
 }
 
 interface ConnectionState {
@@ -73,6 +79,7 @@ export class GameServer {
   readonly #joinLimiter: RateLimiter;
   readonly #presenceLimiter: RateLimiter;
   readonly #presenceIntervalMs: number;
+  readonly #onInternalError: (error: unknown, message: string) => void;
   #presenceTimer: TimerHandle | null = null;
   /** Presence ticks between private self frames. See `STRESS.selfHz`. */
   #selfEvery = 1;
@@ -81,6 +88,9 @@ export class GameServer {
   constructor(options: GameServerOptions) {
     this.#clock = options.clock ?? new SystemClock();
     this.#transport = options.transport;
+    this.#onInternalError =
+      options.onInternalError ??
+      ((error, message) => console.error(`[cursed-poker] internal error handling "${message}":`, error));
     this.sessions = new SessionManager(
       options.sessionSecret ? { secret: options.sessionSecret } : {},
     );
@@ -160,7 +170,17 @@ export class GameServer {
       try {
         this.#handle(state, name, payload, ack);
       } catch (error) {
-        this.#fail(state, ack, toErrorCode(error), (error as Error).message);
+        // A refusal the game made on purpose carries its own explanation, and
+        // the player is owed it. Anything else is a bug in here, and the text
+        // of an exception is a description of the inside of the server: it goes
+        // to whoever runs the server, never to whoever provoked it. It used to
+        // go to the client verbatim and to nobody else at all.
+        if (error instanceof MatchError) {
+          this.#fail(state, ack, error.code, error.message);
+          return;
+        }
+        this.#onInternalError(error, name);
+        this.#fail(state, ack, 'INTERNAL', 'Something went wrong on the server');
       }
     });
 
@@ -355,6 +375,14 @@ export class GameServer {
       previous.close();
     }
 
+    // One connection speaks for one seat. A connection that is already sitting
+    // somewhere else leaves there first — otherwise the old seat keeps this
+    // socket, keeps reading as connected after it closes, and its room can
+    // never be swept: a dozen ghosts a minute from anybody who asks.
+    if (state.roomCode && state.playerId && (state.roomCode !== room.code || state.playerId !== playerId)) {
+      this.#vacate(state.connection, state.roomCode, state.playerId);
+    }
+
     sockets.set(playerId, state.connection);
     state.roomCode = room.code;
     state.playerId = playerId;
@@ -415,20 +443,30 @@ export class GameServer {
   #onClose(state: ConnectionState): void {
     this.#states.delete(state.connection.id);
     this.#messageLimiter.forget(state.connection.id);
+    this.#presenceLimiter.forget(state.connection.id);
 
     if (!state.roomCode || !state.playerId) return;
-    const sockets = this.#roomSockets.get(state.roomCode);
-    if (sockets?.get(state.playerId)?.id === state.connection.id) {
-      sockets.delete(state.playerId);
-    }
+    this.#vacate(state.connection, state.roomCode, state.playerId);
+  }
 
-    const room = this.rooms.get(state.roomCode);
+  /**
+   * A connection stops speaking for a seat: it closed, or it sat down elsewhere.
+   *
+   * Only if it is still the one speaking for it. A connection that was replaced
+   * by a newer one for the same player has nothing left to take away.
+   */
+  #vacate(connection: Connection, roomCode: string, playerId: string): void {
+    const sockets = this.#roomSockets.get(roomCode);
+    if (sockets?.get(playerId)?.id !== connection.id) return;
+    sockets.delete(playerId);
+
+    const room = this.rooms.get(roomCode);
     if (!room) return;
 
     // Before the match starts a departure is a departure; after it, the seat and
     // its chips stay put and the player is simply gone for a while.
-    if (room.match.state.status === 'LOBBY') room.match.leave(state.playerId);
-    else room.match.setConnected(state.playerId, false);
+    if (room.match.state.status === 'LOBBY') room.match.leave(playerId);
+    else room.match.setConnected(playerId, false);
   }
 
   /** One subscription per room, pushing a freshly projected view to each player. */
@@ -470,9 +508,4 @@ export class GameServer {
 
 function isClientMessage(name: string): name is ClientMessageName {
   return Object.hasOwn(CLIENT_MESSAGE_SCHEMAS, name);
-}
-
-function toErrorCode(error: unknown): ErrorCode {
-  if (error instanceof MatchError) return error.code;
-  return 'INTERNAL';
 }

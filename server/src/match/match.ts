@@ -445,6 +445,12 @@ export class Match {
     this.state.players.push(player);
     this.state.players.sort((a, b) => a.seatIndex - b.seatIndex);
 
+    // A lobby everybody walked out of still has its code, and somebody may yet
+    // use it. `leave` hands the host chair on when there is somebody to hand it
+    // to; when there was not, the host is nobody, and a lobby whose host is
+    // nobody can never be started.
+    if (!findPlayer(this.state, this.state.hostPlayerId)) this.state.hostPlayerId = playerId;
+
     this.#emit({ type: 'PLAYER_JOINED', playerId, displayName, seatIndex });
     this.#flush();
     return player;
@@ -614,7 +620,13 @@ export class Match {
     // Only the first look changes what this player may be sent, and only they
     // need telling. Later looks are already visible to the table through
     // presence and cost nothing here.
-    if (first) this.#flush();
+    //
+    // To them alone. This used to be a plain flush, which pushed a fresh view
+    // to the whole table at the instant somebody first looked: nothing in it
+    // was secret, but it was an exact copy of a tell the table is supposed to
+    // get only by watching, and it rebuilt every other player's overlay — bet
+    // slider included — for a change that was none of their business.
+    if (first) this.#flushTo(playerId);
   }
 
   // -------------------------------------------------------------------------
