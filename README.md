@@ -20,7 +20,10 @@ hands**, through one function.
 
 ## Status
 
-**Phases 1-4 complete — four to six friends can sit at the table and play.**
+**Phases 1–7 complete.** Four to six friends can sit at the table and play, and
+the table is frightening. Next up is Phase 8, the first-orbit perk ritual. For a
+fuller picture — what is done, what is next, what is waiting on a decision —
+see [docs/HANDOFF.md](docs/HANDOFF.md).
 
 - **The poker engine.** No-Limit Hold'em for 4-6 players: side pots, split pots,
   correct raise-reopening rules, big-blind antes, button rotation, blind
@@ -28,17 +31,25 @@ hands**, through one function.
 - **Private lobbies over the wire.** Authoritative server, invite codes,
   reconnect that restores your seat and your cards, disconnect handling, rate
   limiting.
-- **The table in 3D.** A round table of seven, six seated players and the hooded
-  figure that deals to them, from a first-person seat you cannot get up from.
+- **The table in 3D.** A round table of seven, from a first-person seat you
+  cannot get up from.
 - **Bodies.** You lift your own cards to look at them, and everybody watches you
   do it. Where you look, how far you lifted, and whether your hands are on your
   chips all reach the rest of the table — and going quiet just makes you still.
+- **The Dealer and the room.** A server-owned figure every player sees doing
+  the same thing at the same moment; lighting, fog and sound that worsen as the
+  evening does, and never get better.
+- **Fear.** A server-side stress model that may not read a card; your own
+  heartbeat, breath, tremor and tunnel vision; and everybody else's shaking
+  hands, breathing and sweat, broadcast as coarse tells.
+- **Composure.** Steady yourself with a short breathing challenge the server
+  judges. Do it well and your tells go quiet; fail and you look worse — and
+  everybody sees you try.
 
-307 tests, including 140 fuzzed whole matches, a shuffle fairness suite, and a
-hidden-information suite that audits every player's view at every decision point.
-
-The Dealer, the lighting, stress, tells, perks and sacrifices are still ahead —
-see [docs/ROADMAP.md](docs/ROADMAP.md).
+530 tests, including 140 fuzzed whole matches, a shuffle fairness suite, a
+hidden-information suite that audits every player's view at every decision
+point, and a test that deals two tables different decks and requires every
+heart rate and tell to match while a hand is live.
 
 ## Layout
 
@@ -77,6 +88,7 @@ readies up, the host begins.
 | Lean in / sit back | mouse wheel over the table |
 | Act | `F` fold · `C` check/call · `R` raise · `A` all in, or click |
 | Size a bet | the slider, or the mouse wheel over it |
+| Steady yourself | `B`, then `Space` — tap with the ring, or hold — everyone sees you do it |
 
 Your cards are dealt face down and you will not see them until you curl a corner
 up. That is deliberate: the look is the game. Everyone at the table can see you
@@ -123,6 +135,7 @@ npm test          # full suite
 npm run typecheck
 npm run sim       # whole-match fuzzing only
 npm run shots     # drive real browsers around the table and screenshot it
+npm run stress    # the stress model over whole simulated (or recorded) evenings
 ```
 
 `npm run shots` needs `npm run dev` already running. In a development build the
@@ -132,6 +145,8 @@ so replication is easier to check as numbers than as a picture.
 
 ## Documents
 
+- [docs/HANDOFF.md](docs/HANDOFF.md) — where the project is, the rules, what is
+  next and what needs deciding: start here
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture, networking choice,
   authority split, state machines, risks, open decisions
 - [docs/ROADMAP.md](docs/ROADMAP.md) — phased implementation checklist

@@ -168,7 +168,7 @@ phase's three real bugs were invisible in a screenshot.
 
 ---
 
-## Phase 5 — The Dealer and atmosphere — in progress
+## Phase 5 — The Dealer and atmosphere — complete except real-hardware frame times
 
 The decision the phase turns on: **the Dealer is a server-owned fact.** He
 rides the presence channel, identically, to everybody, at the same tick. Six
@@ -218,7 +218,7 @@ Still open in this phase:
 
 ---
 
-## Phase 6 — Heart rate and tells
+## Phase 6 — Heart rate and tells ✅ complete
 
 - [x] Server-side stress model with named stress events — spikes that decay,
       a floor that does not, and **no card anywhere in its inputs**
@@ -272,7 +272,7 @@ Still open in this phase:
 
 ---
 
-## Phase 7 — Composure
+## Phase 7 — Composure ✅ complete
 
 - [x] `ComposureChallenge` interface (issue → input → server-validated result).
       The client sends raw key presses with no timestamps; the server times
@@ -352,9 +352,10 @@ Still open in this phase:
 
 ```bash
 npm install
-npm test              # 255 tests
+npm test              # 530 tests
 npm run typecheck
 npm run sim           # whole-match fuzzing only
+npm run stress        # the stress model over whole evenings
 ```
 
 To actually play:
@@ -378,6 +379,7 @@ At the table:
 | Lean in / sit back | mouse wheel over the table — everyone can see you do it |
 | Act | `F` fold · `C` check/call · `R` raise · `A` all in, or click |
 | Size a bet | the slider, or the mouse wheel over it |
+| Steady yourself | `B`, then `Space` — everyone sees you do it |
 
 You will not see your own cards until you lift them, and everyone else can see
 you do it.

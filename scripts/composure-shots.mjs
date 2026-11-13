@@ -99,7 +99,7 @@ async function ask(previous) {
 
 const played = new Set();
 let challenge = null;
-for (let attempt = 0; attempt < 5 && played.size < 2; attempt++) {
+for (let attempt = 0; attempt < 8 && played.size < 2; attempt++) {
   const before = await other.evaluate(() => window.__view()?.serverTime);
   challenge = await ask(challenge);
   console.log(`issued ${challenge.kind} ${JSON.stringify(challenge.spec)}`);
