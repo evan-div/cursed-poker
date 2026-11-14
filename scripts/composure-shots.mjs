@@ -34,7 +34,10 @@ const pages = [];
 for (const name of ['Mara', 'Bern', 'Cass', 'Dov']) {
   const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
   page.on('pageerror', (e) => problems.push(`${name}: ${e.message}`));
-  await page.goto('http://localhost:5173/');
+  // The cheap tier unless asked: a software renderer cannot afford the lens,
+  // and these pictures are of what bodies do, not of the light. QUALITY=high
+  // overrides it; see `scripts/look-shots.mjs` for photographing the room.
+  await page.goto(`http://localhost:5173/?quality=${process.env.QUALITY ?? 'low'}`);
   await page.fill('input[placeholder="Your name"]', name);
   pages.push(page);
 }
@@ -49,7 +52,7 @@ for (const page of pages.slice(1)) {
 }
 for (const page of pages) await page.click('button:has-text("Ready")');
 await pages[0].click('button:has-text("Begin the game")');
-await pages[0].waitForSelector('.table-canvas', { timeout: 15_000 });
+await pages[0].waitForSelector('.table-canvas', { timeout: 180_000 });
 await pages[0].waitForTimeout(1_500);
 // All four stay open: a closed page is a disconnected player, whose short
 // clock folds them on their turn and pushes a view to everybody — which is

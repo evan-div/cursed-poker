@@ -657,12 +657,18 @@ so "we never draw a face we do not have" is a property rather than a claim.
 ### The performance budget
 
 Measured from the seated camera, which is the one players actually use, with
-`npm run shots`:
+`scripts/scene-budget.mjs` — four players, a hand in progress, the whole frame
+including the shadow pass:
 
-| Players | Draw calls | Triangles |
+| | Draw calls | Triangles |
 |---|---|---|
-| 4 | 131 | 6.5k |
-| 6 | 173 | 8.3k |
+| Phase 7, before the visual overhaul | 161 | 78k |
+| After, `low` tier | 248 | 251k |
+| After, `high` tier (with the lens) | 268 | 253k |
+
+(This table used to read 173 draw calls and 8.3k triangles at six players. That
+was measured in Phase 3, before rounded edges and five-fingered hands, and was
+not updated; the first row above is what the scene actually cost by Phase 7.)
 
 The shape that matters is the slope: **about twenty-one draw calls and a thousand
 triangles per seated player**, from the twenty or so meshes a body needs in order
@@ -681,8 +687,12 @@ Deliberate choices behind those numbers:
   genuinely run away, so it was solved before it became a problem.
 - **Materials are shared from one palette**, so the renderer switches material
   state a handful of times per frame rather than once per object.
-- **One shadow-casting light.** The lamp over the table, at a 1024² map.
-  Everything else is unshadowed fill, and heavy fog does the rest.
+- **One shadow-casting light.** The lamp over the table, at a 2048² map (1024²
+  on the `low` tier). Everything else is unshadowed.
+- **Furniture is welded.** Nothing that does not move is more than one mesh per
+  material: seven chairs were forty-two draw calls and are two.
+- **Two quality tiers**, and a governor that steps a slow machine down once.
+  See `client/src/scene/quality.ts`.
 - **Pixel ratio is capped at 2.** A 3× display would otherwise quadruple the
   pixel cost of a scene whose point is that most of it is dark.
 

@@ -41,7 +41,10 @@ async function seat(name) {
   const page = await context.newPage();
   page.on('pageerror', (error) => problems.push(`${name}: ${error.message}`));
   page.on('console', (m) => m.type() === 'error' && problems.push(`${name} console: ${m.text()}`));
-  await page.goto('http://localhost:5173/');
+  // The cheap tier unless asked: a software renderer cannot afford the lens,
+  // and these pictures are of what bodies do, not of the light. QUALITY=high
+  // overrides it; see `scripts/look-shots.mjs` for photographing the room.
+  await page.goto(`http://localhost:5173/?quality=${process.env.QUALITY ?? 'low'}`);
   await page.fill('input[placeholder="Your name"]', name);
   return page;
 }
@@ -61,7 +64,7 @@ for (const page of pages.slice(1)) {
 }
 for (const page of pages) await page.click('button:has-text("Ready")');
 await pages[0].click('button:has-text("Begin the game")');
-await pages[0].waitForSelector('.table-canvas', { timeout: 15_000 });
+await pages[0].waitForSelector('.table-canvas', { timeout: 180_000 });
 await pages[0].waitForTimeout(2_000);
 
 const shot = (name) => pages[0].screenshot({ path: `${OUT}/${name}.png` });

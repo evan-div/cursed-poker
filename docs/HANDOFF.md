@@ -9,18 +9,23 @@ long-form versions; this is the map.
 
 ## 0. Before anything else
 
-**Work on branch `claude/horror-holdem-phase-4-w9umnr`.** It is not the
-repository's default branch. The default is `claude/horror-poker-game-design-q6hdzf`,
-which stops after Phase 2; everything since — the 3D table, bodies, the
-Dealer, stress, tells, composure — is only on the phase-4 branch, which fully
-contains the old one. There is no `main` and no open pull request.
+**Work on branch `claude/vigilant-bell-l3ldus`.** It is not the repository's
+default branch. The default is `claude/horror-poker-game-design-q6hdzf`, which
+stops after Phase 2. `claude/horror-holdem-phase-4-w9umnr` carries Phases 3–7,
+and `claude/vigilant-bell-l3ldus` is that plus the November audit: sixteen bug
+fixes and the whole visual overhaul. Each fully contains the one before. There
+is no `main` and no open pull request.
+
+**Read `docs/AUDIT.md` next.** It is what was found wrong, what was fixed, what
+the game looks like now, and — in §5 — what is still owed, in order.
 
 ```bash
-git fetch origin claude/horror-holdem-phase-4-w9umnr
-git checkout claude/horror-holdem-phase-4-w9umnr
+git fetch origin claude/vigilant-bell-l3ldus
+git checkout claude/vigilant-bell-l3ldus
 npm install
 npm run typecheck     # clean
-npm test              # 530 tests, 40 files, all passing
+npm test              # 575 tests, 46 files, all passing
+npm audit             # 0
 ```
 
 If those two commands are not clean on a fresh clone, stop and find out why
@@ -43,10 +48,15 @@ TypeScript monorepo, npm workspaces:
 | `shared/` | wire protocol (zod schemas), view types, constants: cards, blinds, presence, dealer, stress, composure |
 | `server/` | authoritative simulation. `poker/` is the pure engine; `match/` is the outer state machine and the projection boundary; `net/` is transport, sessions, rooms |
 | `client/` | Three.js scene (`scene/`), DOM overlay (`ui/`), input (`interaction/`), audio (`audio/`), first-person feel (`feel/`) |
+| `docs/` | this file, `AUDIT.md`, `ARCHITECTURE.md`, `ROADMAP.md` |
 | `tests/` | whole-match fuzzing, shuffle fairness, end-to-end over real Socket.IO |
 | `scripts/` | dev runner, browser screenshot/check scripts, the stress report |
 
-About 25k lines of TypeScript. Vite, Vitest, tsx, Socket.IO, Three.js, zod.
+About 29k lines of TypeScript. Vite, Vitest, tsx, Socket.IO, Three.js, zod.
+
+**Nothing is loaded.** No models, no images, no sound files: every surface is
+painted into a canvas at start-up and every solid is turned, welded or sculpted
+from numbers. That is a rule of the house, not an accident — keep it.
 
 ---
 
@@ -122,7 +132,16 @@ everyone's screen at that moment would itself be a leak.
 | First-person feel | — | `feel/pulse.ts`, `ui/tunnel.ts`, `scene/seated-camera.ts` (shake) | — |
 | Composure | `match/composure/` (`challenge.ts`, `breath.ts`, `hold.ts`, `index.ts`) | `feel/composure-guide.ts`, `ui/composure.ts` | `composure.ts` |
 | Telemetry / tuning | `match/stress-telemetry.ts`, `match/simulate.ts`, `net/stress-log-sink.ts` | — | — |
-| Audio | — | `audio/cues.ts` (what), `audio/engine.ts` (how) | — |
+| Audio | — | `audio/cues.ts` (what), `audio/engine.ts` (how), `audio/loop.ts` | — |
+| Surfaces (painted) | — | `scene/textures.ts`, `scene/noise.ts`, `scene/materials.ts` | — |
+| Table, chairs | — | `scene/furniture.ts` | — |
+| Room, door, candles | — | `scene/room-shell.ts` | — |
+| Lamp, lit air, dust | — | `scene/lamp.ts`; the light itself in `scene/table.ts` | — |
+| Heads, hair, clothes | — | `scene/figure.ts` (used by `avatar.ts`) | — |
+| Chips, button | — | `scene/chips.ts`; breakdown and layout in `scene/layout.ts` | — |
+| The lens | — | `scene/post.ts` | — |
+| Quality tiers | — | `scene/quality.ts` | — |
+| Overlay | — | `ui/hud.ts` (keyed sections, action clock), `ui/lobby.ts`, `style.css` | — |
 
 ---
 
@@ -137,6 +156,7 @@ everyone's screen at that moment would itself be a leak.
 | 5 Dealer and atmosphere | **Done except one item:** frame times on real hardware (needs a real GPU) |
 | 6 Heart rate and tells | **Done.** Stress model, tells, `self` channel, first-person feedback, avatar tells, telemetry/replay harness, all twelve stress events wired, stare scaled by dread |
 | 7 Composure | **Done.** Interface, two minigames, masking effect, visible act, swap test |
+| — Audit and visual overhaul | **Done** (November). See `AUDIT.md` |
 | 8 First orbit and perks | **Next.** Not started |
 | 9 Sacrifices | Not started |
 | 10 Permanent elimination | Not started |
@@ -182,6 +202,9 @@ npm run stress        # stress model over simulated evenings (see below)
 Open http://localhost:5173 in 4–6 tabs. One creates a lobby, the others join
 with the code, everyone readies, the host begins.
 
+Add `?quality=low` or `?quality=high` to pin a quality tier. Without it the
+game starts on `high` and steps itself down once if frames are slow.
+
 At the table: drag or click to look (Escape releases pointer lock) ·
 **hold right-click or `V` and pull toward you** to lift your cards · mouse
 wheel to lean in · `F` fold · `C` check/call · `R` raise · `A` all in ·
@@ -223,7 +246,11 @@ is in the code now.
 | 6 | Should time spent staring at your cards, and sitting perfectly still, feed stress? They are recorded in presence but are not stress inputs | Not wired |
 | 7 | Does the blind clock pause for the perk ritual? (Phase 8) | Architecture recommends yes |
 | 8 | Hand/finger rig for sacrifices (Phase 9): per-finger visibility + procedural grips is the recommendation; `Avatar.removeFinger` already hides one | Open |
-| 9 | Branch hygiene: make the phase-4 branch the default (or merge it), so new sessions and clones start on the real code | Not done; needs the owner |
+| 9 | Branch hygiene: make `claude/vigilant-bell-l3ldus` the default (or merge it), so new sessions and clones start on the real code | Not done; needs the owner. Three branches deep now |
+| 10 | Is the look right? Palette, faces, how dark and how early | In constants; see `AUDIT.md` §6 |
+| 11 | Muck or show every hand at showdown? | Show |
+| 12 | Stage an all-in runout street by street? | Not staged: it all arrives at once |
+| 13 | Rematch in the same lobby? | No: a finished match ends at a banner |
 
 Longer-horizon decisions that can safely wait are in `ARCHITECTURE.md` §11.
 
@@ -231,14 +258,21 @@ Longer-horizon decisions that can safely wait are in `ARCHITECTURE.md` §11.
 
 ## 9. Known gaps and unverified things
 
+- **It cannot be played with anybody who is not on your machine.** There is no
+  production entry point and nothing serves the built client. `AUDIT.md` §5.1.
+  This is the first thing to fix.
 - **Nothing has been played by humans since Phase 4's playtest rounds.** The
-  Dealer, stress, tells, the first-person feel, composure and their audio have
-  only been checked by tests and headless browser scripts.
+  Dealer, stress, tells, the first-person feel, composure, their audio, and now
+  the whole look have only been checked by tests and headless browser scripts.
 - **Audio has never been listened to** (heartbeat, breathing, composure
   exhale, Dealer rise). `scripts/audio-check.mjs` only proves the context runs.
 - **Frame times on real hardware** are unmeasured; all browser runs use
-  software rendering. Draw calls and triangles are measured
-  (`scripts/scene-budget.mjs`).
+  software rendering, where the `high` tier takes about two seconds a frame.
+  Draw calls and triangles are measured (`scripts/scene-budget.mjs`): 248 and
+  251k for four players on `low`, 268 and 253k on `high`. The quality governor
+  (`scene/quality.ts`) exists because nobody has the real number.
+- **The overlay has no unit tests.** No DOM in the test environment. Its bugs
+  were found and fixed by driving a browser.
 - **Stress is tuned against bots.** Bots look and re-check at fixed rates and
   never because of their cards; real recordings (`STRESS_TELEMETRY_DIR`) are
   what to tune against.
@@ -264,7 +298,12 @@ Longer-horizon decisions that can safely wait are in `ARCHITECTURE.md` §11.
   pins its own Playwright, which does not match the browser preinstalled in
   the cloud environment, so pass the browser explicitly:
   `CHROME=/opt/pw-browsers/chromium node scripts/tell-shots.mjs`. Every script
-  reads `CHROME` and `OUT` (where screenshots go; default `.shots/…`).
+  reads `CHROME` and `OUT` (where screenshots go; default `.shots/…`), and
+  `QUALITY` (default `low`: the lens is too slow to photograph bodies through
+  under software rendering).
+- **To judge a change to how the room looks**, `scripts/look-shots.mjs`: the
+  same ten camera positions every time, on the `high` tier, so two runs can be
+  put side by side. `DREAD=0.9` photographs the end of the evening.
 - **Wait on conditions, not clocks**, in browser scripts: four software-
   rendered pages run at a frame or two a second, and anything that eases on
   frame time (camera, avatars, the vignette, overlays) is slow there.
@@ -272,7 +311,12 @@ Longer-horizon decisions that can safely wait are in `ARCHITECTURE.md` §11.
   track the pointer rather than teleporting it.
 - **Dev hooks** (development builds only): `__view()`, `__bodies()`,
   `__feel(level|null)`, `__tells(seat, tells|null)`, `__freeLook(x,y,z,at)`,
-  `__inspect()`, `__sceneStats()`, `__audio()`.
+  `__inspect()`, `__sceneStats()`, `__audio()`, `__dread(level|null)`,
+  `__quality('low'|'high')`.
+- **A symmetric placeholder hides sign errors.** Heads pitched the wrong way
+  for four phases because a rounded box looks the same tilted up or down. When
+  something stands in for a shape, test the direction it faces, not just the
+  number that drives it.
 - Commit messages explain *why*, with what was measured. Comments in the code
   explain decisions and the wrong turns before them; keep that up — several
   record bugs that would otherwise be reintroduced.
