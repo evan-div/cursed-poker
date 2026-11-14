@@ -35,7 +35,7 @@ import {
 } from './figure.js';
 import { gazePoint } from './gaze.js';
 import { gripPose, shieldPose, type Grip } from './hold.js';
-import { solveArm } from './ik.js';
+import { solveArm, type ArmSolution } from './ik.js';
 import { STILL_MOTION, type Offset, type TellMotion } from './tells.js';
 
 /**
@@ -160,6 +160,8 @@ interface ArmChain {
   hand: HandParts;
   /** Where this hand rests when it is not doing anything. */
   restAt: Vector3;
+  /** The last solve, kept so the next one has somewhere to write. */
+  solved: ArmSolution;
 }
 
 export class Avatar {
@@ -629,22 +631,19 @@ export class Avatar {
 
   /** Solves one arm onto a wrist position and orients the hand. */
   #aimArm(arm: ArmChain, wristAt: Vector3, turn: Quaternion): void {
-    const solved = solveArm(arm.shoulder, wristAt, arm.upperLength, arm.forearmLength, ELBOW_POLE);
+    // Nothing here allocates: twelve arms are aimed sixty times a second.
+    const solved = solveArm(arm.shoulder, wristAt, arm.upperLength, arm.forearmLength, ELBOW_POLE, arm.solved);
 
-    const toElbow = solved.elbow.clone().sub(arm.shoulder).normalize();
-    arm.upper.quaternion.setFromUnitVectors(FORWARD, toElbow);
+    AIM.copy(solved.elbow).sub(arm.shoulder).normalize();
+    arm.upper.quaternion.setFromUnitVectors(FORWARD, AIM);
 
-    const toWrist = solved.wrist
-      .clone()
-      .sub(solved.elbow)
-      .applyQuaternion(arm.upper.quaternion.clone().invert())
-      .normalize();
-    arm.forearm.quaternion.setFromUnitVectors(FORWARD, toWrist);
+    AIM.copy(solved.wrist).sub(solved.elbow).applyQuaternion(UNDO.copy(arm.upper.quaternion).invert()).normalize();
+    arm.forearm.quaternion.setFromUnitVectors(FORWARD, AIM);
 
     // The hand hangs off the end of all that, so undo everything the arm did on
     // the way here before applying the orientation the hand is supposed to have.
-    const accumulated = arm.upper.quaternion.clone().multiply(arm.forearm.quaternion).invert();
-    arm.hand.group.quaternion.copy(accumulated.multiply(turn));
+    UNDO.copy(arm.upper.quaternion).multiply(arm.forearm.quaternion).invert();
+    arm.hand.group.quaternion.copy(UNDO.multiply(turn));
   }
 
   #headWorldPosition(): { x: number; y: number; z: number } {
@@ -735,6 +734,7 @@ export class Avatar {
       forearmLength: forearm.length,
       hand,
       restAt: wristAt.clone(),
+      solved: { elbow: new Vector3(), wrist: new Vector3(), strained: false },
     });
     return upper.joint;
   }
@@ -781,6 +781,8 @@ const PINCH = {
 const PEELING = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), 0.6);
 
 /** Scratch, so aiming an arm every frame does not allocate. */
+const AIM = new Vector3();
+const UNDO = new Quaternion();
 const HAND_X = new Vector3();
 const HAND_Y = new Vector3();
 const HAND_Z = new Vector3();

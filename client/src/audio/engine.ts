@@ -1,6 +1,7 @@
 import type { PerspectiveCamera } from 'three';
 import { blend } from '@cursed/shared';
 import type { Cue, CueKind } from './cues.js';
+import { loopSeamlessly } from './loop.js';
 
 /**
  * The part that actually makes noise.
@@ -108,7 +109,11 @@ export function startRoomAudio(): RoomAudio {
   tone.gain.value = MIX.tone.calm;
   tone.connect(master);
   const hum = context.createBufferSource();
-  hum.buffer = render(context, roomTone);
+  // Folded so that it wraps without a tick every seven seconds: see `loop.ts`.
+  const tonal = loopSeamlessly(render(context, roomTone).getChannelData(0), RATE * 0.6);
+  const looped = context.createBuffer(1, tonal.length, RATE);
+  looped.getChannelData(0).set(tonal);
+  hum.buffer = looped;
   hum.loop = true;
   const humFilter = context.createBiquadFilter();
   humFilter.type = 'lowpass';

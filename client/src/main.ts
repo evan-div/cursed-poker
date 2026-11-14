@@ -12,9 +12,9 @@ import { describeEvent, type LogLine } from './narration.js';
 import { GameScene } from './scene/game-scene.js';
 import { dressMaterials } from './scene/materials.js';
 import { PresenceReporter } from './interaction/presence-reporter.js';
-import { el } from './ui/dom.js';
+import { countdown, el, serverNow, setServerTime } from './ui/dom.js';
 import { renderLanding, renderLobby, type LobbyHandlers } from './ui/lobby.js';
-import { actionForKey, renderHud } from './ui/hud.js';
+import { CLOCK_LOW_MS, Hud, actionForKey } from './ui/hud.js';
 import { Nameplates } from './ui/nameplates.js';
 import { Tunnel } from './ui/tunnel.js';
 import { ComposureOverlay } from './ui/composure.js';
@@ -37,12 +37,19 @@ const connection = new GameConnection();
 
 let view: ClientView | null = null;
 let log: LogLine[] = [];
+/** Lines ever logged, so the overlay can tell a new line from the same fourteen. */
+let logVersion = 0;
 let banner: { text: string; kind: 'error' | 'info' } | null = null;
 let connected = false;
 /** Local echo so a click cannot be sent twice while the next view is in flight. */
 let pendingAction = false;
 
 let scene: GameScene | null = null;
+let hud: Hud | null = null;
+/** The decision currently on the clock, and how long it was given. */
+let onClock: { deadline: number; totalMs: number } | null = null;
+/** True for the moment between getting up and the socket coming back. */
+let leaving = false;
 let nameplates: Nameplates | null = null;
 let tunnel: Tunnel | null = null;
 let composure: ComposureOverlay | null = null;
@@ -90,6 +97,7 @@ function handlingChips(handling: boolean): void {
 
 connection.onView = (next) => {
   view = next;
+  setServerTime(next.serverTime);
   pendingAction = false;
   render();
 };
@@ -97,7 +105,10 @@ connection.onView = (next) => {
 connection.onEvents = (events: MatchEvent[]) => {
   for (const event of events) {
     const line = describeEvent(event, view);
-    if (line) log.push(line);
+    if (line) {
+      log.push(line);
+      logVersion++;
+    }
   }
   log = log.slice(-160);
   scene?.notify(events);
@@ -120,8 +131,10 @@ connection.onError = (error) => setBanner(error.message, 'error');
 
 connection.onStatus = (isConnected) => {
   connected = isConnected;
-  if (!isConnected) setBanner('Connection lost — reconnecting…', 'error');
+  // Getting up closes the socket on purpose. That is not a lost connection.
+  if (!isConnected && !leaving) setBanner('Connection lost — reconnecting…', 'error');
   else if (banner?.kind === 'error') banner = null;
+  if (isConnected) leaving = false;
   render();
 };
 
@@ -149,7 +162,26 @@ const lobbyHandlers: LobbyHandlers = {
     const response = await connection.send('lobby:start', {});
     if (!response.ok) setBanner(response.message, 'error');
   },
+  leave: () => leaveTable(),
 };
+
+/**
+ * Gets up from the table, or out of the lobby, and goes back to the front door.
+ *
+ * See `GameConnection#leave` for why this is a client matter. Everything this
+ * client was holding about the room is dropped with it.
+ */
+function leaveTable(): void {
+  leaving = true;
+  view = null;
+  log = [];
+  logVersion = 0;
+  banner = null;
+  peekedHand = 0;
+  pendingAction = false;
+  connection.leave();
+  render();
+}
 
 /**
  * "I am lifting my cards."
@@ -232,13 +264,15 @@ function renderTable(current: ClientView): void {
     tunnel = new Tunnel();
     nameplates = new Nameplates();
     composure = new ComposureOverlay();
-    stage.append(tunnel.root, nameplates.root, composure.root);
+    hud = new Hud();
+    stage.append(tunnel.root, nameplates.root, composure.root, hud.root);
 
     scene.onFrame = () => {
       if (!scene || !nameplates || !canvas) return;
       nameplates.project(scene.seated.camera, canvas.clientWidth, canvas.clientHeight);
       tunnel?.set(scene.felt.tunnel);
       composure?.frame(performance.now(), scene.felt.unsteadiness);
+      tickActionClock();
     };
 
     // Pointer lock is offered, never imposed: clicking the table takes it,
@@ -265,15 +299,37 @@ function renderTable(current: ClientView): void {
   nameplates?.update(current);
   composure?.apply(current.you.composure, performance.now());
 
-  // The overlay is rebuilt from scratch; the canvas and nameplates are not.
-  for (const stale of stage.querySelectorAll('.hud, .banner')) stale.remove();
+  // The overlay keeps itself up to date, part by part: see `Hud`. Only the
+  // banner is thrown away and remade, because it is one line of text.
+  for (const stale of stage.querySelectorAll('.banner')) stale.remove();
   if (banner) stage.append(bannerElement(banner));
-  stage.append(
-    renderHud(
-      { view: current, log, connected, pendingAction, pointerLocked },
-      { submit, handlingChips },
-    ),
+  hud?.update(
+    { view: current, log, logVersion, connected, pendingAction, pointerLocked },
+    { submit, handlingChips, leave: leaveTable },
   );
+}
+
+/**
+ * Moves the action clock: on the overlay, and on the plate of whoever is acting.
+ *
+ * The deadline is the server's and is in the server's time. How long the
+ * decision was given is not sent, so it is taken to be what was left when this
+ * client first heard of it — which is the whole clock, give or take the trip
+ * here.
+ */
+function tickActionClock(): void {
+  const hand = view?.hand;
+  const deadline = hand?.actionDeadline ?? null;
+  if (!hand || deadline === null || hand.actingSeat === null) {
+    onClock = null;
+    hud?.tick(null, 0, false);
+    nameplates?.setClock(null, 0, false);
+    return;
+  }
+  const remaining = deadline - serverNow();
+  if (onClock?.deadline !== deadline) onClock = { deadline, totalMs: Math.max(remaining, 1) };
+  hud?.tick(remaining, onClock.totalMs, hand.actingSeat === view?.you.seatIndex);
+  nameplates?.setClock(hand.actingSeat, remaining / onClock.totalMs, remaining <= CLOCK_LOW_MS);
 }
 
 function teardownScene(): void {
@@ -281,6 +337,8 @@ function teardownScene(): void {
   reporter.setEnabled(false);
   scene.dispose();
   scene = null;
+  hud = null;
+  onClock = null;
   nameplates = null;
   tunnel = null;
   composure = null;
@@ -389,12 +447,7 @@ setInterval(() => {
 // re-rendering, so a countdown cannot pull a button out from under a click.
 setInterval(() => {
   const clock = app.querySelector<HTMLElement>('.hud-top .clock');
-  if (clock && view?.level) {
-    const remaining = Math.max(0, (view.level.endsAt ?? 0) - Date.now());
-    const minutes = Math.floor(remaining / 60_000);
-    const seconds = Math.floor((remaining % 60_000) / 1_000);
-    clock.textContent = view.level.endsAt === null ? '--:--' : `${minutes}:${String(seconds).padStart(2, '0')}`;
-  }
+  if (clock && view?.level) clock.textContent = countdown(view.level.endsAt);
 }, 1_000);
 
 // What this client was last told, for the browser checks in `scripts/`. It is

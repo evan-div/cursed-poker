@@ -37,14 +37,28 @@ export interface ArmSolution {
 /** Keeps a solved arm just short of locked, so it never snaps rigid. */
 const NEVER_QUITE_STRAIGHT = 0.995;
 
+/** Scratch for the solve, so twelve arms a frame do not each make six vectors. */
+const TO_TARGET = new Vector3();
+const AXIS = new Vector3();
+const SIDEWAYS = new Vector3();
+
+/**
+ * `into`, when given, is filled in and returned instead of a fresh solution.
+ *
+ * Every arm at the table is solved on every frame. Allocating the answer each
+ * time was sixty-odd short-lived objects a frame for the collector to chase;
+ * a caller that solves the same arm repeatedly should hand its last answer
+ * back in.
+ */
 export function solveArm(
   shoulder: Vector3,
   target: Vector3,
   upperLength: number,
   forearmLength: number,
   pole: Vector3,
+  into?: ArmSolution,
 ): ArmSolution {
-  const toTarget = new Vector3().subVectors(target, shoulder);
+  const toTarget = TO_TARGET.subVectors(target, shoulder);
   const distance = toTarget.length();
 
   const longest = (upperLength + forearmLength) * NEVER_QUITE_STRAIGHT;
@@ -52,9 +66,9 @@ export function solveArm(
   const reach = Math.min(Math.max(distance, shortest), longest);
   const strained = reach !== distance;
 
-  const axis =
-    distance > 1e-6 ? toTarget.clone().divideScalar(distance) : new Vector3(0, 0, 1);
-  const wrist = shoulder.clone().addScaledVector(axis, reach);
+  const axis = distance > 1e-6 ? AXIS.copy(toTarget).divideScalar(distance) : AXIS.set(0, 0, 1);
+  const solution = into ?? { elbow: new Vector3(), wrist: new Vector3(), strained: false };
+  solution.wrist.copy(shoulder).addScaledVector(axis, reach);
 
   // How far along the shoulder-to-wrist line the elbow sits, and how far off it.
   const along = (upperLength * upperLength - forearmLength * forearmLength + reach * reach) / (2 * reach);
@@ -62,7 +76,7 @@ export function solveArm(
 
   // The pole decides which way the elbow breaks. Without it the joint is free
   // to rotate about the shoulder-wrist axis and picks a new answer every frame.
-  const sideways = pole.clone().addScaledVector(axis, -pole.dot(axis));
+  const sideways = SIDEWAYS.copy(pole).addScaledVector(axis, -pole.dot(axis));
   if (sideways.lengthSq() < 1e-8) {
     // Pole parallel to the arm: any perpendicular will do, so take one.
     sideways.set(axis.y, -axis.x, 0);
@@ -70,6 +84,7 @@ export function solveArm(
   }
   sideways.normalize();
 
-  const elbow = shoulder.clone().addScaledVector(axis, along).addScaledVector(sideways, out);
-  return { elbow, wrist, strained };
+  solution.elbow.copy(shoulder).addScaledVector(axis, along).addScaledVector(sideways, out);
+  solution.strained = strained;
+  return solution;
 }

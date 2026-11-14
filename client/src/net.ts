@@ -85,4 +85,20 @@ export class GameConnection {
   forgetSession(): void {
     localStorage.removeItem(TOKEN_KEY);
   }
+
+  /**
+   * Gets up and walks out.
+   *
+   * There is no "leave" message and there does not need to be: the server
+   * already treats a closed connection as a departure — out of a lobby
+   * altogether, away from a match with the seat held. What was missing was the
+   * client ever letting go. It kept the session token for ever, so a finished
+   * match, or one a player had busted out of, was resumed on every reload and
+   * there was no way back to the front door short of clearing site data.
+   */
+  leave(): void {
+    this.forgetSession();
+    this.socket.disconnect();
+    this.socket.connect();
+  }
 }
