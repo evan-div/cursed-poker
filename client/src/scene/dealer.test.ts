@@ -41,6 +41,20 @@ function headAt(dealer: Dealer): Vector3 {
   return dealer.head.getWorldPosition(new Vector3());
 }
 
+describe('where he looks', () => {
+  it('looks down at the people he deals to, not over their heads', () => {
+    // He stands half a metre over everybody sitting down, so looking at any of
+    // them is looking down. His head used to pitch the wrong way: the bearing
+    // was right and the lights in the hood were aimed at the ceiling.
+    for (const seatIndex of [0, 2, 5]) {
+      const dealer = new Dealer();
+      dealer.apply(presence({ gaze: { kind: 'SEAT', seatIndex }, posture: 'WATCHING' }), 0, T0);
+      settle(dealer, 12);
+      expect(facing(dealer).y, `looking at seat ${seatIndex}`).toBeLessThan(-0.05);
+    }
+  });
+});
+
 describe('how big he is', () => {
   const measure = (dealer: Dealer) => {
     settle(dealer, 10);

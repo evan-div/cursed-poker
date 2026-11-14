@@ -309,7 +309,8 @@ export class Avatar {
 
   /** How far the head is pitched from level, in radians. Negative is down. */
   get headPitch(): number {
-    return this.#head.rotation.x;
+    // The other way round from the rotation that draws it: see `update`.
+    return -this.#head.rotation.x;
   }
 
   /** Hides what the player would be looking through rather than at. */
@@ -412,7 +413,13 @@ export class Avatar {
 
     this.#head.rotation.order = 'YXZ';
     this.#head.rotation.y = (this.#headYaw + tells.head.yaw) * (1 - COMPOSING.faceForward * c);
-    this.#head.rotation.x = this.#headPitch + tells.head.pitch - COMPOSING.bow * c;
+    // Negated. A body faces its own +Z, and turning that about +X by a positive
+    // angle tips it *down* — so a pitch measured the usual way, up positive, goes
+    // on with its sign changed. It went on unchanged for a long time: every head
+    // looking down at its cards was tilted at the ceiling, and a bow threw the
+    // head back. Nobody saw, because a head with no face looks the same either
+    // way up.
+    this.#head.rotation.x = -(this.#headPitch + tells.head.pitch - COMPOSING.bow * c);
 
     // A breath lifts the shoulders and the head on them, and the chest swells
     // a little. The arms ride up with the shoulders and the hands stay where

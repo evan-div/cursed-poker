@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Mesh, Vector3, type Object3D } from 'three';
+import { Mesh, Quaternion, Vector3, type Object3D } from 'three';
 import { Avatar } from './avatar.js';
 import { gazePoint } from './gaze.js';
 import { gripPose } from './hold.js';
@@ -98,6 +98,28 @@ describe('a head on a neck', () => {
         settle(avatar);
         expect(Math.abs(avatar.headYaw)).toBeLessThanOrEqual((72 * Math.PI) / 180 + 1e-9);
       }
+    }
+  });
+
+  it('looks down at its own cards, and up at the thing standing over the table', () => {
+    // Which way a face points, asked of the skull itself. Heads used to pitch
+    // the wrong way round — down at your cards tipped the face at the ceiling —
+    // and nothing noticed, because a head that is a rounded box looks the same
+    // tilted either way. The moment heads had faces, every player at the table
+    // was staring at the lamp.
+    const facing = (avatar: Avatar) => {
+      avatar.group.updateMatrixWorld(true);
+      return new Vector3(0, 0, 1).applyQuaternion(avatar.skull.getWorldQuaternion(new Quaternion()));
+    };
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      avatar.setGaze({ kind: 'OWN_CARDS' });
+      settle(avatar);
+      expect(facing(avatar).y, `seat ${seatIndex} looking at its cards`).toBeLessThan(-0.3);
+
+      avatar.setGaze({ kind: 'DEALER' });
+      settle(avatar);
+      expect(facing(avatar).y, `seat ${seatIndex} looking at the Dealer`).toBeGreaterThan(0.05);
     }
   });
 
@@ -372,6 +394,10 @@ describe('steadying themselves', () => {
     settle(avatar);
     expect(avatar.composing).toBeGreaterThan(0.99);
     expect(avatar.headPitch).toBeLessThan(level - 0.2);
+    // And the face itself goes down with it: a bow, not a head thrown back.
+    avatar.group.updateMatrixWorld(true);
+    const face = new Vector3(0, 0, 1).applyQuaternion(avatar.skull.getWorldQuaternion(new Quaternion()));
+    expect(face.y).toBeLessThan(-0.2);
 
     avatar.setComposing(false);
     settle(avatar);

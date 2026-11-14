@@ -207,7 +207,9 @@ export class Dealer {
 
     this.#head.rotation.order = 'YXZ';
     this.#head.rotation.y = this.#headYaw + jolt * 0.55;
-    this.#head.rotation.x = this.#headPitch - jolt * 0.22;
+    // Negated, for the reason given in `Avatar#update`: up is positive in the
+    // pitch and down is positive in the rotation that draws it.
+    this.#head.rotation.x = -(this.#headPitch - jolt * 0.22);
 
     // Posture. Slow, because none of it should ever look like reacting.
     const settle = 1 - Math.exp(-3 * delta);
