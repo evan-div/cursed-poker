@@ -52,7 +52,7 @@ TypeScript monorepo, npm workspaces:
 | `tests/` | whole-match fuzzing, shuffle fairness, end-to-end over real Socket.IO |
 | `scripts/` | dev runner, browser screenshot/check scripts, the stress report |
 
-About 29k lines of TypeScript. Vite, Vitest, tsx, Socket.IO, Three.js, zod.
+About 30k lines of TypeScript. Vite, Vitest, tsx, Socket.IO, Three.js, zod.
 
 **Nothing is loaded.** No models, no images, no sound files: every surface is
 painted into a canvas at start-up and every solid is turned, welded or sculpted
