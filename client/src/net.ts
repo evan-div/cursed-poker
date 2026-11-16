@@ -18,7 +18,21 @@ import type {
 
 export type Ack<T> = ({ ok: true } & T) | { ok: false; code: string; message: string };
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? 'http://localhost:3001';
+/**
+ * Where the server is.
+ *
+ * Built for real, the client is served by the game server itself, so the
+ * answer is "wherever this page came from" and nothing has to be configured —
+ * which is what lets one link be the whole invitation. At a desk the page comes
+ * from Vite and the server is the same machine on another port; the host is
+ * taken from the address bar rather than assumed to be `localhost`, so a
+ * second laptop on the same network can join a game being developed on the
+ * first. `VITE_SERVER_URL` overrides both, for a client hosted apart from its
+ * server.
+ */
+const SERVER_URL: string =
+  import.meta.env.VITE_SERVER_URL ??
+  (import.meta.env.DEV ? `${location.protocol}//${location.hostname}:3001` : location.origin);
 const TOKEN_KEY = 'cursed-poker.session';
 
 export class GameConnection {

@@ -14,20 +14,13 @@ import type { SelfFrame } from './stress.js';
 import type { ClientView } from './view.js';
 import type { HandEvent } from './hand-events.js';
 import type { PresenceFrame } from './presence.js';
-import { MAX_PLAYERS, SEAT_COUNT } from './config.js';
+import { MAX_PLAYERS, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, SEAT_COUNT } from './config.js';
 import { COMPOSURE_INPUTS } from './composure.js';
 
 // ---------------------------------------------------------------------------
 // Primitives
 // ---------------------------------------------------------------------------
 
-/**
- * Lobby code alphabet, chosen to survive being read aloud: no 0/O, no 1/I/L.
- * 31^6 is about 887 million codes, which with join rate limiting is enough that
- * guessing a live lobby is not a practical attack.
- */
-export const ROOM_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-export const ROOM_CODE_LENGTH = 6;
 
 export const roomCodeSchema = z
   .string()

@@ -24,7 +24,7 @@ git fetch origin claude/vigilant-bell-l3ldus
 git checkout claude/vigilant-bell-l3ldus
 npm install
 npm run typecheck     # clean
-npm test              # 575 tests, 46 files, all passing
+npm test              # 612 tests, 51 files, all passing
 npm audit             # 0
 ```
 
@@ -133,6 +133,7 @@ everyone's screen at that moment would itself be a leak.
 | Composure | `match/composure/` (`challenge.ts`, `breath.ts`, `hold.ts`, `index.ts`) | `feel/composure-guide.ts`, `ui/composure.ts` | `composure.ts` |
 | Telemetry / tuning | `match/stress-telemetry.ts`, `match/simulate.ts`, `net/stress-log-sink.ts` | — | — |
 | Audio | — | `audio/cues.ts` (what), `audio/engine.ts` (how), `audio/loop.ts` | — |
+| Deployment | `config.ts`, `main.ts`, `net/static.ts`, `net/client-address.ts` | `net.ts` (where the server is), `ui/lobby.ts` (invite links) | `config.ts` (`parseRoomCode`) |
 | Surfaces (painted) | — | `scene/textures.ts`, `scene/noise.ts`, `scene/materials.ts` | — |
 | Table, chairs | — | `scene/furniture.ts` | — |
 | Room, door, candles | — | `scene/room-shell.ts` | — |
@@ -217,8 +218,14 @@ wheel to lean in · `F` fold · `C` check/call · `R` raise · `A` all in ·
 | `ACTION_TIMEOUT_MS` | override the 30 s action clock (scripts use 600000) |
 | `DEV_FAST=1` | short stacks and quick clocks |
 | `STRESS_TELEMETRY_DIR` | record every match's stress inputs here, one file each |
-| `SESSION_SECRET` | keep reconnect tokens valid across restarts |
-| `CLIENT_ORIGIN`, `PORT`, `VITE_SERVER_URL` | deployment wiring |
+| `SESSION_SECRET` | keep reconnect tokens valid across restarts; **required** by `npm start` |
+| `TRUST_PROXY` | how many reverse proxies are in front of the server (default 0). Read `README.md` "Deploying" before setting it |
+| `CLIENT_ORIGIN`, `CLIENT_DIST`, `PORT`, `VITE_SERVER_URL` | deployment wiring; none needed for the one-process setup |
+
+**Deployed**, it is one process on one port: `npm run build && npm start`
+serves the built client and the socket from the same origin. `README.md` has
+the details, and there is a `Dockerfile`. Server configuration is read and
+checked in `server/src/config.ts`; the file server is `server/src/net/static.ts`.
 
 **The stress report**
 
@@ -258,9 +265,12 @@ Longer-horizon decisions that can safely wait are in `ARCHITECTURE.md` §11.
 
 ## 9. Known gaps and unverified things
 
-- **It cannot be played with anybody who is not on your machine.** There is no
-  production entry point and nothing serves the built client. `AUDIT.md` §5.1.
-  This is the first thing to fix.
+- **A restart ends every match.** It can be deployed now (`README.md`,
+  "Deploying"), but rooms are still held in memory. Snapshotting `MatchState`
+  is the next step and is not done.
+- **The Docker image has never been built.** The machine it was written on had
+  no Docker daemon. Its runtime stage was reproduced by hand — the same files,
+  a production-only install, the same start command — and that works.
 - **Nothing has been played by humans since Phase 4's playtest rounds.** The
   Dealer, stress, tells, the first-person feel, composure, their audio, and now
   the whole look have only been checked by tests and headless browser scripts.

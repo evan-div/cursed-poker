@@ -24,8 +24,9 @@ All fixed, each with a test that failed first. Sixteen in total; see §2.
 **It looked like its own scaffolding.** Boxes, cylinders and flat colour on a
 floor that ran out into fog. It is now a room: see §3.
 
-**The biggest thing left is not a bug.** There is no way to play this with
-friends who are not on your machine. Everything else in §5 is smaller than that.
+**The biggest thing left was not a bug.** There was no way to play this with
+friends who are not on your machine. That has since been fixed (§5.1); what
+remains at the top of the list is that nobody has played it.
 
 | | Before | After |
 |---|---|---|
@@ -181,26 +182,47 @@ Said plainly, because these are the places a surprise would come from.
 
 In the order I would do them.
 
-### 5.1 It cannot be played with friends who are not in the room
+### 5.1 It could not be played with friends who are not in the room — done
 
-The client's server address defaults to `localhost:3001`, the server accepts
-only loopback origins unless told otherwise, there is no production entry
-point, and nothing serves the built client. To play this over the internet
-today you would deploy two things by hand and get the CORS and URL settings
-right yourself.
+*Fixed after this audit was written; kept here because the reasoning is the
+documentation.*
 
-The smallest fix is one process: the Node server serves the built client from
-the same origin (no CORS at all), a `npm run build && npm start`, and a
-Dockerfile. Half a day. Two things to settle with it:
+The client's server address defaulted to `localhost:3001`, the server accepted
+only loopback origins, there was no production entry point, and nothing served
+the built client.
 
-- **Rate limiting behind a proxy.** Join attempts are limited per remote
-  address. Behind any reverse proxy every player shares one address, so twelve
-  joins a minute is the limit for the whole world. Needs `X-Forwarded-For`
-  handling, deliberately, with a trusted-proxy setting.
+It is now one process on one port. `npm run build && npm start` serves the
+built client and the socket from the same origin, so there is no address to
+bake in and no cross-origin setting to get wrong; `README.md` has a "Deploying"
+section and there is a `Dockerfile`. What came with it:
+
+- **The file server** (`server/src/net/static.ts`) is the only code in the
+  server that opens a path somebody else chose. Its tests try fourteen ways of
+  writing "the folder above", a link out of the folder, and a hidden file; they
+  were checked by removing the guards and watching them fail.
+- **Rate limiting behind a proxy.** Join attempts are limited per address, and
+  behind a reverse proxy every player shares one. `TRUST_PROXY` says how many
+  proxies to believe; unset, the forwarding header is ignored entirely, because
+  on a server reached directly it is the client's to write. Tested over real
+  sockets, both ways round.
+- **A session secret is required in production**, instead of invented at boot.
+- **Invitation links.** Clicking the lobby code copies a link with the code
+  after the `#` — where it never reaches a server log — and opening it leaves
+  only a name to type.
+- **A content security policy** on the page: nothing is loaded from anywhere
+  else, so nothing is allowed to be.
+
+Still owed from this item:
+
 - **A restart ends every match.** Rooms are in memory. `SESSION_SECRET` keeps
   tokens valid across a restart, but there is no room for them to resume into.
   `MatchState` was kept as plain JSON for exactly this; snapshotting it is the
   natural next step and is not yet done.
+- **The Docker image has not been built.** No daemon was available. Its runtime
+  stage was reproduced by hand and runs.
+- **It has not been run on a real host.** Everything above was verified on one
+  machine: four browsers, one origin, an invitation link, a reload resuming
+  into the same seat. A real proxy, real HTTPS and real latency are untested.
 
 ### 5.2 Play it
 
@@ -242,6 +264,10 @@ Worth recording, so nobody looks again without a reason.
   nothing from outside itself and `shared/`.
 - **Forgeable sessions.** HMAC-signed, constant-time compared, room-bound,
   expiring.
+- **Anything to gain by connecting from another website.** A socket opened
+  from a foreign page carries no credential: the session token lives in this
+  origin's storage and has to be sent in a message. Such a page is a stranger
+  with no seat, which is what anybody is.
 
 ---
 
@@ -264,7 +290,7 @@ The nine in `HANDOFF.md` §8 stand. What this audit adds or changes:
 ```bash
 npm install
 npm run typecheck        # clean
-npm test                 # 575 tests, 46 files
+npm test                 # 612 tests, 51 files
 npm audit                # 0
 npm --workspace @cursed/client run build
 

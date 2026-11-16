@@ -153,6 +153,9 @@ const lobbyHandlers: LobbyHandlers = {
     const response = await connection.send<SessionGrant>('lobby:join', { code, displayName });
     if (!response.ok) return setBanner(response.message, 'error');
     connection.rememberSession(response);
+    // The invitation has been used. Left in the address bar it would be offered
+    // again the next time this player came back to the front door.
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   },
   setReady: async (ready) => {
     const response = await connection.send('lobby:ready', { ready });

@@ -1,4 +1,4 @@
-import { MAX_PLAYERS, MIN_PLAYERS, type ClientView } from '@cursed/shared';
+import { MAX_PLAYERS, MIN_PLAYERS, parseRoomCode, type ClientView } from '@cursed/shared';
 import { button, el, input } from './dom.js';
 
 /**
@@ -19,6 +19,22 @@ export interface LobbyHandlers {
 }
 
 const NAME_KEY = 'cursed-poker.name';
+
+/**
+ * An invitation: this page's own address with the lobby's code after the `#`.
+ *
+ * After the hash rather than in the path or the query, so it never reaches a
+ * server, a proxy's access log or a `Referer` header. A lobby code is the only
+ * thing between a stranger and a private game.
+ */
+export function inviteLink(code: string): string {
+  return `${location.origin}${location.pathname}#${code}`;
+}
+
+/** The code in the address this page was opened with, if it was an invitation. */
+export function invitedTo(): string | null {
+  return parseRoomCode(decodeURIComponent(location.hash.replace(/^#/, '')));
+}
 
 /** The masthead both screens share. */
 function masthead(): HTMLElement {
@@ -59,7 +75,10 @@ export function renderLanding(handlers: LobbyHandlers): HTMLElement {
   name.setAttribute('aria-label', 'Your name');
   name.setAttribute('autocomplete', 'nickname');
 
-  const code = input({ placeholder: 'Lobby code', maxLength: 6, className: 'code-input' });
+  // Opened from an invitation: the code is already filled in, and all that is
+  // left to type is a name.
+  const invited = invitedTo();
+  const code = input({ placeholder: 'Lobby code', maxLength: 6, className: 'code-input', value: invited ?? '' });
   code.setAttribute('aria-label', 'Lobby code');
   code.setAttribute('autocomplete', 'off');
   code.spellcheck = false;
@@ -77,8 +96,24 @@ export function renderLanding(handlers: LobbyHandlers): HTMLElement {
   const row = el('div', 'row');
   row.append(code, button('Join', '', join));
 
-  panel.append(name, button('Create lobby', 'primary', create), el('div', 'divider', 'or join one'), row);
+  if (invited) {
+    // Joining is the point of the visit, so it comes first and is the big one.
+    const enter = button(`Join ${invited}`, 'primary', join);
+    panel.append(
+      el('p', 'hint invited', 'You have been asked to a table.'),
+      name,
+      enter,
+      el('div', 'divider', 'or'),
+      button('Create a lobby of your own', '', create),
+    );
+    code.hidden = true;
+    panel.append(code);
+  } else {
+    panel.append(name, button('Create lobby', 'primary', create), el('div', 'divider', 'or join one'), row);
+  }
   screen.append(masthead(), panel, controls());
+  // Straight to the one thing left to fill in.
+  queueMicrotask(() => name.focus());
   return screen;
 }
 
@@ -91,9 +126,11 @@ export function renderLobby(view: ClientView, handlers: LobbyHandlers): HTMLElem
 
   const share = el('div', 'share');
   const codeBox = el('button', 'code', view.room.code);
-  codeBox.setAttribute('title', 'Copy the code');
+  codeBox.setAttribute('title', 'Copy an invitation link');
   codeBox.addEventListener('click', () => {
-    void navigator.clipboard?.writeText(view.room.code).then(
+    // The link, not the bare code: whoever is sent it has one thing to click
+    // and nothing to type but their name.
+    void navigator.clipboard?.writeText(inviteLink(view.room.code)).then(
       () => {
         codeBox.classList.add('copied');
         setTimeout(() => codeBox.classList.remove('copied'), 1_200);
@@ -101,7 +138,7 @@ export function renderLobby(view: ClientView, handlers: LobbyHandlers): HTMLElem
       () => {},
     );
   });
-  share.append(codeBox, el('span', 'hint', 'Give this to the others. Click to copy.'));
+  share.append(codeBox, el('span', 'hint', 'Click to copy a link the others can open.'));
   panel.append(share);
 
   const list = el('ul', 'players');

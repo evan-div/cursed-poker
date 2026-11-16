@@ -46,7 +46,7 @@ see [docs/HANDOFF.md](docs/HANDOFF.md).
   judges. Do it well and your tells go quiet; fail and you look worse — and
   everybody sees you try.
 
-575 tests, including 140 fuzzed whole matches, a shuffle fairness suite, a
+612 tests, including 140 fuzzed whole matches, a shuffle fairness suite, a
 hidden-information suite that audits every player's view at every decision
 point, and a test that deals two tables different decks and requires every
 heart rate and tell to match while a hand is live.
@@ -128,11 +128,61 @@ The UI says `offline` in the top right when the socket cannot reach the server.
 development and any `localhost` origin is accepted; set it in production and only
 that origin is.
 
+## Deploying
+
+To play with people who are not in the room, run it as one process on one port.
+The server serves the built client itself, so the page and the socket come from
+the same origin and there is nothing to configure between them:
+
+```bash
+npm install
+npm run build
+SESSION_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))") npm start
+```
+
+Open <http://localhost:3001>. Put that behind anything that gives it a public
+address and HTTPS, create a lobby, and click the lobby code: it copies an
+invitation link. Whoever opens it types a name and is at the table.
+
+There is a `Dockerfile` that does the same thing:
+
+```bash
+docker build -t cursed-poker .
+docker run -p 3001:3001 -e SESSION_SECRET=... cursed-poker
+```
+
+| | |
+|---|---|
+| `SESSION_SECRET` | **Required.** Signs reconnect tokens. Keep it the same across restarts or every restart throws everybody out of their seat. The server will not start in production without one |
+| `PORT` | Defaults to 3001. Most hosts set it for you |
+| `TRUST_PROXY` | **Set this to `1` on any host that puts a proxy in front of you** — which is nearly all of them. See below |
+| `CLIENT_ORIGIN` | Only if the client is hosted somewhere other than this server |
+| `CLIENT_DIST` | Only if the built client is somewhere other than `client/dist` |
+
+**`TRUST_PROXY`.** Opening lobbies and guessing lobby codes are both limited per
+address. Behind a reverse proxy every player arrives from the proxy's address,
+so without this setting twelve join attempts a minute is the limit for
+*everybody put together* and a table of six can lock itself out. `TRUST_PROXY`
+is the number of proxies in front of the server: `1` for a platform's own
+(Fly, Render, Railway, Heroku, nginx on the same box), `2` if there is a CDN
+such as Cloudflare in front of that. Leave it at `0` when the server is reached
+directly — set higher than the truth, it lets a client choose its own address
+by sending a header.
+
+**A restart ends every match.** Rooms are held in memory. `SESSION_SECRET` keeps
+players' tokens valid across a restart, but there is no table left for them to
+come back to. Do not deploy in the middle of an evening.
+
+**It needs WebSockets.** The client does not fall back to polling. Any proxy in
+front of it has to pass the upgrade through; most do by default.
+
 ## Commands
 
 ```bash
 npm test          # full suite
 npm run typecheck
+npm run build     # build the client into client/dist
+npm start         # the whole game on one port, from that build (needs SESSION_SECRET)
 npm run sim       # whole-match fuzzing only
 npm run shots     # drive real browsers around the table and screenshot it
 npm run stress    # the stress model over whole simulated (or recorded) evenings

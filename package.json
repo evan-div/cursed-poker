@@ -2,7 +2,7 @@
   "name": "cursed-poker",
   "private": true,
   "version": "0.0.0",
-  "description": "Horror Texas Hold'em — last-man-standing supernatural poker for 4-6 players.",
+  "description": "Horror Texas Hold'em \u2014 last-man-standing supernatural poker for 4-6 players.",
   "type": "module",
   "workspaces": [
     "shared",
@@ -22,18 +22,20 @@
     "sim": "vitest run tests/match-simulation.test.ts",
     "shots": "node scripts/table-shots.mjs",
     "dev:fast": "DEV_FAST=1 npm --workspace @cursed/server run dev",
-    "stress": "tsx scripts/stress-report.ts"
+    "stress": "tsx scripts/stress-report.ts",
+    "build": "npm --workspace @cursed/client run build",
+    "start": "npm --workspace @cursed/server run start -- --production"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "playwright": "^1.62.1",
-    "tsx": "^4.23.13",
     "typescript": "^5.7.2",
     "vitest": "^5.1.0"
   },
   "dependencies": {
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
+    "tsx": "^4.23.13",
     "zod": "^4.6.7"
   }
 }

@@ -352,7 +352,7 @@ Still open in this phase:
 
 ```bash
 npm install
-npm test              # 575 tests
+npm test              # 612 tests
 npm run typecheck
 npm run sim           # whole-match fuzzing only
 npm run stress        # the stress model over whole evenings

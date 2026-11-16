@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.shots
+.telemetry
+*.stress.json
+.dev-session-secret
+.env
+.env.local
+docs
+scripts
+tests
+**/*.test.ts
