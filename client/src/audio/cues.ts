@@ -120,6 +120,14 @@ export function cuesFor(event: MatchEvent, context: CueContext): Cue[] {
     case 'POT_AWARDED':
       return [{ kind: 'POT', at: POT_POSITION, gain: 0.55 }];
 
+    case 'ALL_IN_SHOWDOWN':
+      // Hands turned face up, one after another, each where its owner sits.
+      return event.hands.map((hand) => ({
+        kind: 'MUCK' as const,
+        at: seatPoint(hand.seatIndex, RADIUS.holeCards, TABLE.surfaceHeight),
+        gain: 0.45,
+      }));
+
     case 'PLAYER_ELIMINATED':
       return [
         { kind: 'ELIMINATION', at: seatPoint(event.seatIndex, RADIUS.body, 1.0), gain: 0.8 },

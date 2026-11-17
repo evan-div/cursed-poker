@@ -291,6 +291,8 @@ function winnerBanner(view: ClientView, handlers: HudHandlers): HTMLElement | nu
 function waitingText(view: ClientView): string {
   if (view.you.legalActions) return '';
   if (view.room.status === 'FINISHED') return 'The game is over.';
+  // Nobody is being waited on. The cards are simply still coming.
+  if (view.hand?.allInRunout) return 'All in. The board runs out…';
   const acting = view.hand?.seats.find((s) => s.seatIndex === view.hand?.actingSeat);
   return acting ? `Waiting on ${acting.displayName}…` : 'Waiting…';
 }

@@ -140,7 +140,16 @@ const FAST_STRUCTURE: BlindStructure = {
  * means the second one wins outright, quietly undoing DEV_FAST's other clocks.
  */
 const timings = {
-  ...(config.fast ? { actionTimeoutMs: 8_000, showdownDisplayMs: 2_500, betweenHandsMs: 1_200 } : {}),
+  ...(config.fast
+    ? {
+        actionTimeoutMs: 8_000,
+        showdownDisplayMs: 2_500,
+        betweenHandsMs: 1_200,
+        runoutRevealMs: 900,
+        runoutStreetMs: 1_100,
+        runoutSettleMs: 700,
+      }
+    : {}),
   ...(config.actionTimeoutMs > 0 ? { actionTimeoutMs: config.actionTimeoutMs } : {}),
 };
 

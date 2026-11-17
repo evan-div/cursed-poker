@@ -69,6 +69,7 @@ import {
   resetForHand,
 } from './presence.js';
 import { presenceFrame, projectForViewer, roomDread, selfFrame } from './projection.js';
+import { splitRunout } from './runout.js';
 
 /**
  * The outer state machine: one lobby, from empty room to last player standing.
@@ -104,6 +105,14 @@ export interface MatchTimings {
   foldedHandDisplayMs: number;
   /** Breath between settling one hand and dealing the next. */
   betweenHandsMs: number;
+  /**
+   * An all-in runout: how long the hands lie face up before the first card
+   * comes, how long each street is left to be looked at before the next, and
+   * the beat after the last one before anybody is told who won. See `runout.ts`.
+   */
+  runoutRevealMs: number;
+  runoutStreetMs: number;
+  runoutSettleMs: number;
 }
 
 export const DEFAULT_TIMINGS: MatchTimings = {
@@ -112,6 +121,9 @@ export const DEFAULT_TIMINGS: MatchTimings = {
   showdownDisplayMs: 4_000,
   foldedHandDisplayMs: 1_500,
   betweenHandsMs: 1_500,
+  runoutRevealMs: 2_200,
+  runoutStreetMs: 2_600,
+  runoutSettleMs: 1_600,
 };
 
 export interface MatchOptions {
@@ -153,6 +165,12 @@ const MOVED_BY_HIS_HANDS = new Set<MatchEvent['type']>([
   'STREET_DEALT',
   'POT_AWARDED',
 ]);
+
+/** How many cards a runout act puts on the board. */
+function streetCards(act: readonly MatchEvent[]): number {
+  const dealt = act.find((event) => event.type === 'STREET_DEALT');
+  return dealt && dealt.type === 'STREET_DEALT' ? dealt.cards.length : 0;
+}
 
 /**
  * Hears about every change. `only`, when set, means the change concerns that
@@ -221,6 +239,7 @@ export class Match {
       clockElapsedMs: 0,
       clockRunningSince: null,
       actionDeadline: null,
+      runout: null,
       lastResult: null,
       winnerPlayerId: null,
     };
@@ -679,10 +698,11 @@ export class Match {
     this.#clock.clearTimeout(this.#timer);
     this.#timer = null;
 
+    let events: MatchEvent[];
     try {
       const step = act(this.state.table!, seatIndex, action);
       this.state.table = step.table;
-      for (const event of step.events) this.#emit(event);
+      events = step.events;
     } catch (error) {
       // Re-arm so a rejected action does not leave the table waiting forever.
       this.#armActionTimer();
@@ -691,11 +711,66 @@ export class Match {
     }
 
     if (this.state.table!.status === 'AWAITING_SETTLEMENT') {
-      this.#scheduleSettlement();
+      this.#concludeHand(events);
     } else {
+      for (const event of events) this.#emit(event);
       this.#armActionTimer();
     }
     this.#flush();
+  }
+
+  /**
+   * The engine has finished the hand. Tell the table — at once, or in acts.
+   *
+   * Usually at once. But when the hand ended with cards still to come and
+   * nobody able to bet on them, the engine dealt them all in this one step,
+   * and the table is told a street at a time instead: see `runout.ts`.
+   *
+   * Events are *emitted* as they are told, not as they happened, and that is
+   * load-bearing. Stress is raised from emitted events and tells are
+   * broadcast, so a result emitted early would be on the winner's hands before
+   * it was on the felt.
+   */
+  #concludeHand(events: MatchEvent[]): void {
+    const acts = splitRunout(events);
+    const hand = this.state.table!.hand!;
+    if (!acts || !hand.result?.showdown) {
+      for (const event of events) this.#emit(event);
+      this.#scheduleSettlement();
+      return;
+    }
+
+    this.state.actionDeadline = null;
+    this.state.runout = { boardShown: hand.board.length - acts.streets.reduce((n, act) => n + streetCards(act), 0) };
+    for (const event of acts.opening) this.#emit(event);
+    // The hands go over. The cards, and not a word about what they make.
+    this.#emit({
+      type: 'ALL_IN_SHOWDOWN',
+      hands: hand.result.showdown
+        .map((reveal) => ({ seatIndex: reveal.seatIndex, holeCards: [...reveal.holeCards] }))
+        .sort((a, b) => a.seatIndex - b.seatIndex),
+    });
+
+    const pending = [...acts.streets];
+    const next = (): void => {
+      if (this.#disposed) return;
+      const act = pending.shift();
+      if (act) {
+        this.state.runout = { boardShown: this.state.runout!.boardShown + streetCards(act) };
+        for (const event of act) this.#emit(event);
+        this.#timer = this.#clock.setTimeout(
+          next,
+          pending.length > 0 ? this.#timings.runoutStreetMs : this.#timings.runoutSettleMs,
+        );
+      } else {
+        // The last card has been looked at. Now who won.
+        this.state.runout = null;
+        for (const event of acts.closing) this.#emit(event);
+        this.#scheduleSettlement();
+      }
+      this.#flush();
+    };
+    this.#timer = this.#clock.setTimeout(next, this.#timings.runoutRevealMs);
   }
 
   #actingPlayer(): PlayerRecord | undefined {
@@ -837,13 +912,13 @@ export class Match {
     const step = startHand(this.state.table!, this.#rng);
     this.state.table = step.table;
     this.state.phase = 'HAND_IN_PROGRESS';
-    for (const event of step.events) this.#emit(event);
 
     // A hand can be over before anyone acts when every stack is swallowed by
-    // the blinds.
+    // the blinds — and that, too, is a board run out with nobody able to bet.
     if (this.state.table.status === 'AWAITING_SETTLEMENT') {
-      this.#scheduleSettlement();
+      this.#concludeHand(step.events);
     } else {
+      for (const event of step.events) this.#emit(event);
       this.#armActionTimer();
     }
     this.#flush();

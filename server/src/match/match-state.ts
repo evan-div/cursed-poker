@@ -101,6 +101,16 @@ export interface MatchState {
 
   /** Epoch ms by which the acting seat must act, or null. */
   actionDeadline: number | null;
+
+  /**
+   * An all-in hand being told a street at a time, or null.
+   *
+   * The engine has already finished the hand — `table.hand` holds the whole
+   * board and the result — and the table has so far been shown only the first
+   * `boardShown` cards of it. `projection.ts` reads this to hold the rest back.
+   * See `runout.ts`.
+   */
+  runout: { boardShown: number } | null;
   /** The hand just finished, held so players can read the result. */
   lastResult: HandResult | null;
   winnerPlayerId: string | null;

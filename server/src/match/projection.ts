@@ -3,6 +3,7 @@ import {
   levelAt,
   type Card,
   type ClientView,
+  type HandPhase,
   type HandView,
   type LevelView,
   type PlayerView,
@@ -199,6 +200,17 @@ function projectHand(match: MatchState): HandView | null {
   // showdown produces none, and a live hand produces none either.
   const reveals = new Map((hand.result?.showdown ?? []).map((r) => [r.seatIndex, r]));
 
+  // An all-in hand being run out. The engine finished it in one step — the
+  // whole board and the result are sitting in `hand` — and the table is being
+  // told a street at a time. Until the last card is down, this is the table as
+  // it *stands*: the board so far, the hands face up because nobody can bet,
+  // the stacks before anybody is paid, and nothing about what any hand makes.
+  //
+  // Every one of those is something this function could leak the ending
+  // through, which is why holding it back happens here, at the boundary, and
+  // not in a client's animation.
+  const runout = match.runout;
+
   const seats: SeatView[] = match.table.seats
     .filter((tableSeat) => tableSeat.seated)
     .map((tableSeat): SeatView => {
@@ -210,31 +222,44 @@ function projectHand(match: MatchState): HandView | null {
         seatIndex: tableSeat.seatIndex,
         playerId: tableSeat.playerId,
         displayName: player?.displayName ?? tableSeat.playerId,
-        stack: handSeat?.stack ?? tableSeat.stack,
+        // What they sat down with, less what they put in: their stack before
+        // the pot is paid. Afterwards it is simply their stack.
+        stack: handSeat
+          ? runout
+            ? handSeat.stackAtStart - handSeat.totalCommitted
+            : handSeat.stack
+          : tableSeat.stack,
         betThisRound: handSeat?.betThisRound ?? 0,
         folded: handSeat?.folded ?? false,
         allIn: handSeat?.allIn ?? false,
         inHand: handSeat !== undefined,
         connected: player?.connected ?? false,
         revealedCards: reveal ? [...reveal.holeCards] : null,
-        handCategory: reveal?.category ?? null,
-        bestFive: reveal ? [...reveal.bestFive] : null,
+        // Ranked against the whole board, so naming the hand names the river.
+        handCategory: runout ? null : (reveal?.category ?? null),
+        bestFive: reveal && !runout ? [...reveal.bestFive] : null,
       };
     });
 
   return {
     handNumber: hand.handNumber,
-    phase: hand.phase,
+    phase: runout ? streetOf(runout.boardShown) : hand.phase,
     buttonSeat: hand.buttonSeat,
     smallBlindSeat: hand.smallBlindSeat,
     bigBlindSeat: hand.bigBlindSeat,
-    board: [...hand.board],
+    board: runout ? hand.board.slice(0, runout.boardShown) : [...hand.board],
     currentBet: hand.currentBet,
     potTotal: hand.seats.reduce((sum, s) => sum + s.totalCommitted, 0),
     actingSeat: hand.actingSeat,
     actionDeadline: hand.actingSeat === null ? null : match.actionDeadline,
+    allInRunout: runout !== null,
     seats,
   };
+}
+
+/** The street a board of this many cards is on. */
+function streetOf(boardCards: number): HandPhase {
+  return boardCards >= 5 ? 'RIVER' : boardCards === 4 ? 'TURN' : boardCards >= 3 ? 'FLOP' : 'PREFLOP';
 }
 
 function projectSelf(match: MatchState, viewer: PlayerRecord | undefined, now: number): SelfView {

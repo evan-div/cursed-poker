@@ -52,21 +52,35 @@ function auditView(view: ClientView): FoundArray[] {
   return found;
 }
 
+/**
+ * The community cards the table has been shown.
+ *
+ * Not always the whole board: an all-in hand is finished by the engine in one
+ * step and told a street at a time, so for a few seconds the server holds
+ * cards that are dealt and not yet public. They are as secret as the deck.
+ */
+function boardSoFar(match: Match): Card[] {
+  const board = match.state.table?.hand?.board ?? [];
+  return board.slice(0, match.state.runout?.boardShown ?? board.length);
+}
+
 /** Every card this viewer is legitimately entitled to see, right now. */
 function permittedCards(match: Match, playerId: string): Set<Card> {
   const allowed = new Set<Card>();
   const hand = match.state.table?.hand;
 
-  for (const card of hand?.board ?? []) allowed.add(card);
+  for (const card of boardSoFar(match)) allowed.add(card);
 
   const seat = match.state.players.find((p) => p.playerId === playerId)?.seatIndex;
   const own = hand?.seats.find((s) => s.seatIndex === seat)?.holeCards;
   for (const card of own ?? []) allowed.add(card);
 
-  // Showdown reveals are public by the rules of poker.
+  // Showdown reveals are public by the rules of poker. While an all-in hand is
+  // being run out, that is the hands themselves and not yet the five cards
+  // each one makes — those are picked from a board nobody has seen all of.
   for (const reveal of hand?.result?.showdown ?? []) {
     for (const card of reveal.holeCards) allowed.add(card);
-    for (const card of reveal.bestFive) allowed.add(card);
+    if (!match.state.runout) for (const card of reveal.bestFive) allowed.add(card);
   }
   for (const reveal of match.state.lastResult?.showdown ?? []) {
     for (const card of reveal.holeCards) allowed.add(card);
@@ -79,7 +93,7 @@ function assertNoLeak(match: Match, playerId: string | null): void {
   const view = match.viewFor(playerId);
   const allowed = playerId === null ? new Set<Card>() : permittedCards(match, playerId);
   // A spectator may still see the community cards.
-  for (const card of match.state.table?.hand?.board ?? []) allowed.add(card);
+  for (const card of boardSoFar(match)) allowed.add(card);
   if (playerId === null) {
     for (const reveal of match.state.lastResult?.showdown ?? []) {
       for (const card of reveal.holeCards) allowed.add(card);
@@ -87,7 +101,7 @@ function assertNoLeak(match: Match, playerId: string | null): void {
     }
     for (const reveal of match.state.table?.hand?.result?.showdown ?? []) {
       for (const card of reveal.holeCards) allowed.add(card);
-      for (const card of reveal.bestFive) allowed.add(card);
+      if (!match.state.runout) for (const card of reveal.bestFive) allowed.add(card);
     }
   }
 
@@ -288,7 +302,9 @@ describe('the projection boundary', () => {
       let guard = 0;
       while (h.match.state.status === 'IN_PROGRESS' && guard++ < 400) {
         const hand = h.match.state.table?.hand;
-        if (hand?.result?.showdown && hand.result.showdown.length > 1) {
+        // Once it has been told. During an all-in runout the hands are up but
+        // not yet named — `runout.test.ts` holds that half.
+        if (hand?.result?.showdown && hand.result.showdown.length > 1 && !h.match.state.runout) {
           const reveals = hand.result.showdown;
           for (const player of h.match.state.players) {
             const view = h.match.viewFor(player.playerId);

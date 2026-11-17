@@ -68,6 +68,11 @@ export const SIM_TIMINGS: MatchTimings = {
   showdownDisplayMs: 4_000,
   foldedHandDisplayMs: 1_500,
   betweenHandsMs: 1_500,
+  // As shipped: a simulated evening should take as long over an all-in as a
+  // real one does, or its stress would decay on a different clock.
+  runoutRevealMs: 2_200,
+  runoutStreetMs: 2_600,
+  runoutSettleMs: 1_600,
 };
 
 export interface EveningOptions {

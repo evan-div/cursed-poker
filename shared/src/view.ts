@@ -70,6 +70,15 @@ export interface HandView {
   actingSeat: number | null;
   /** Epoch milliseconds by which the acting seat must act, or null. */
   actionDeadline: number | null;
+  /**
+   * True while an all-in hand is being run out a street at a time.
+   *
+   * Nobody left in the hand can bet, so their cards are face up
+   * (`revealedCards`) and the board is still arriving. Everything in the view is
+   * the table *as it stands*: the board so far, the stacks before anybody is
+   * paid, and no word yet on what any hand is worth.
+   */
+  allInRunout: boolean;
   seats: SeatView[];
 }
 

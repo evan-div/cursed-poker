@@ -13,6 +13,7 @@ import { z } from 'zod';
 import type { SelfFrame } from './stress.js';
 import type { ClientView } from './view.js';
 import type { HandEvent } from './hand-events.js';
+import type { Card } from './cards.js';
 import type { PresenceFrame } from './presence.js';
 import { MAX_PLAYERS, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, SEAT_COUNT } from './config.js';
 import { COMPOSURE_INPUTS } from './composure.js';
@@ -227,6 +228,12 @@ export type LobbyEvent =
   | { type: 'BLIND_LEVEL_UP'; level: number; smallBlind: number; bigBlind: number; ante: number }
   | { type: 'PLAYER_TIMED_OUT'; seatIndex: number; forcedFold: boolean }
   | { type: 'PLAYER_ELIMINATED'; playerId: string; seatIndex: number; place: number }
+  /**
+   * Nobody left in the hand can bet, so the hands go face up and the rest of
+   * the board is run out. Carries the cards and nothing about what they are
+   * worth: that is for the board to say, a street at a time.
+   */
+  | { type: 'ALL_IN_SHOWDOWN'; hands: { seatIndex: number; holeCards: Card[] }[] }
   | { type: 'MATCH_ENDED'; winnerPlayerId: string };
 
 export type MatchEvent = HandEvent | LobbyEvent;

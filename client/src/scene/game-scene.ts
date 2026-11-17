@@ -437,6 +437,11 @@ export class GameScene {
         case 'SHOWDOWN':
           this.seated.focusOn(POT_POSITION, ATTENTION_WEIGHT.reckoning, now, 2_200);
           break;
+        case 'ALL_IN_SHOWDOWN':
+          // Hands are going over and the board is about to come. Everybody at
+          // a real table is looking at the middle of it by now.
+          this.seated.focusOn(POT_POSITION, ATTENTION_WEIGHT.reckoning, now, 2_600);
+          break;
         case 'PLAYER_ELIMINATED':
           this.#lookAtSeat(event.seatIndex, ATTENTION_WEIGHT.reckoning, now, 2_600);
           break;
