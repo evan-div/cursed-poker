@@ -41,6 +41,8 @@ export interface HudHandlers {
   handlingChips: (handling: boolean) => void;
   /** Get up from the table. See `leaveTable` in `main.ts`. */
   leave: () => void;
+  /** Ask for the table to be laid again. Only the host's does anything. */
+  rematch: () => void;
 }
 
 export interface HudState {
@@ -121,7 +123,11 @@ export class Hud {
       [JSON.stringify(view.you.legalActions), state.pendingAction, waitingText(view), view.level?.smallBlind].join('|'),
       () => actionBar(state, handlers),
     );
-    this.#section('winner', `${view.winnerPlayerId ?? ''}|${view.room.status}`, () => winnerBanner(view, handlers));
+    this.#section(
+      'winner',
+      `${view.winnerPlayerId ?? ''}|${view.room.status}|${view.room.hostPlayerId}|${view.players.filter((p) => p.connected).length}`,
+      () => winnerBanner(view, handlers),
+    );
 
     // The clock is one element that is moved, never rebuilt: see `tick`.
     if (!this.#clock.isConnected) this.root.append(this.#clock);
@@ -233,6 +239,8 @@ function hintFor(state: HudState): Hint {
     (seat) => seat.seatIndex === view.you.seatIndex && seat.inHand && !seat.folded,
   );
   if (!inHand) return 'none';
+  // The hands are face up on the table. Nobody needs telling how to look.
+  if (view.hand?.allInRunout) return 'none';
   if (!view.you.hasPeeked) return 'peek';
   if (!state.pointerLocked) return 'look';
   // Only once they have looked: the first thing to learn is the cards.
@@ -279,12 +287,24 @@ function winnerBanner(view: ClientView, handlers: HudHandlers): HTMLElement | nu
   if (!view.winnerPlayerId) return null;
   const winner = view.players.find((p) => p.playerId === view.winnerPlayerId);
   const banner = el('div', 'hud-winner');
-  banner.append(
-    el('span', 'winner-line', `${winner?.displayName ?? 'Someone'} is the last one at the table.`),
-    // A finished match used to be a room nobody could leave: the session
-    // resumed into it on every reload until the server swept it away.
-    button('Leave the table', 'primary', () => handlers.leave()),
-  );
+  banner.append(el('span', 'winner-line', `${winner?.displayName ?? 'Someone'} is the last one at the table.`));
+
+  // Another evening, in the same room. The host lays the table; everybody
+  // still here goes back to the lobby in the chair they had, the ones who were
+  // taken included.
+  const host = view.players.find((p) => p.isHost);
+  const staying = view.players.filter((p) => p.connected).length;
+  if (host?.playerId === view.you.playerId) {
+    banner.append(
+      button('Deal again', 'primary', () => handlers.rematch()),
+      el('span', 'winner-note', staying === 1 ? 'Nobody else is still here.' : `${staying} of you are still here.`),
+    );
+  } else {
+    banner.append(el('span', 'winner-note', `${host?.displayName ?? 'The host'} can deal again.`));
+  }
+  // A finished match used to be a room nobody could leave: the session
+  // resumed into it on every reload until the server swept it away.
+  banner.append(button('Leave the table', 'quiet', () => handlers.leave()));
   return banner;
 }
 

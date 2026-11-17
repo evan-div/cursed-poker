@@ -325,7 +325,11 @@ function paintFeltMarkings(ctx: CanvasRenderingContext2D): void {
   ink.textAlign = 'center';
   ink.textBaseline = 'middle';
   for (let i = 0; i < text.length; i++) {
-    const angle = (i / text.length) * Math.PI * 2;
+    // Anticlockwise. With the tops of the letters toward the middle, a reader
+    // in a chair reads the arc in front of them from their left to their
+    // right, and seen from above that is against the clock. Laid out the
+    // other way it was perfectly formed and backwards: "TSE ATCAI AELA".
+    const angle = -(i / text.length) * Math.PI * 2;
     ink.save();
     ink.translate(centre + Math.sin(angle) * textRadius, centre - Math.cos(angle) * textRadius);
     // Tops of the letters toward the middle, so the near arc is the right way up.

@@ -46,7 +46,7 @@ see [docs/HANDOFF.md](docs/HANDOFF.md).
   judges. Do it well and your tells go quiet; fail and you look worse — and
   everybody sees you try.
 
-612 tests, including 140 fuzzed whole matches, a shuffle fairness suite, a
+646 tests, including 140 fuzzed whole matches, a shuffle fairness suite, a
 hidden-information suite that audits every player's view at every decision
 point, and a test that deals two tables different decks and requires every
 heart rate and tell to match while a hand is live.

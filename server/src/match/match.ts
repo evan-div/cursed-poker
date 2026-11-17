@@ -194,7 +194,9 @@ export class Match {
    */
   readonly #dealerRng: RandomSource;
   readonly #timings: MatchTimings;
-  readonly #telemetry: StressObserver | null;
+  /** Who is recording the stress model's inputs. A new evening gets a new one. */
+  #telemetry: StressObserver | null;
+  readonly #stressTuning: Partial<StressTuning> | undefined;
   readonly #composureRng: RandomSource;
   readonly #composureKinds: readonly ComposureChallenge[];
   /** How long the current decision's clock was armed for, for `CLOCK_LOW`. */
@@ -218,6 +220,7 @@ export class Match {
     this.#dealerRng = options.dealerRng ?? new CryptoRandomSource();
     this.#timings = { ...DEFAULT_TIMINGS, ...options.timings };
     this.#telemetry = options.telemetry ?? null;
+    this.#stressTuning = options.stressTuning;
     this.#composureRng = options.composureRng ?? new CryptoRandomSource();
     this.#composureKinds = options.composureKinds ?? DEFAULT_COMPOSURE_KINDS;
 
@@ -505,6 +508,14 @@ export class Match {
 
     this.#emit({ type: 'PLAYER_CONNECTION', playerId, connected });
 
+    // A finished game is waiting on one person: the host, to lay the table
+    // again. If that is who just walked out, the chair passes to whoever is
+    // still here, or the room is stuck behind somebody who has gone home.
+    if (!connected && this.state.status === 'FINISHED' && playerId === this.state.hostPlayerId) {
+      const heir = this.state.players.find((p) => p.connected);
+      if (heir) this.state.hostPlayerId = heir.playerId;
+    }
+
     // A player who drops on their turn should not hold the table for 30 seconds,
     // and one who comes back mid-turn deserves their full clock again.
     if (this.state.phase === 'HAND_IN_PROGRESS' && this.#actingPlayer()?.playerId === playerId) {
@@ -560,6 +571,63 @@ export class Match {
 
     this.#emit({ type: 'MATCH_STARTED', seatCount: this.state.players.length });
     this.#beginHand();
+  }
+
+  /**
+   * Lays the table again: same room, same code, same people, a new evening.
+   *
+   * Only the host, and only once the game is over. Whoever is still connected
+   * comes back to the lobby in the chair they had, nobody is ready, and anybody
+   * who has gone is not waited for — their chair is simply free.
+   *
+   * Everything else is thrown away and made new: the table, the room's dread,
+   * everybody's nerves, the Dealer, the blind clock. The rule is that a second
+   * evening must be indistinguishable from a first, so nothing here is reset
+   * field by field where it can be rebuilt whole.
+   *
+   * `telemetry`, when given, replaces whoever was recording: one recording is
+   * one evening.
+   */
+  rematch(playerId: string, telemetry?: StressObserver | null): void {
+    if (this.state.status !== 'FINISHED') {
+      throw new MatchError('NOT_READY', 'The game is not over yet');
+    }
+    if (playerId !== this.state.hostPlayerId) {
+      throw new MatchError('NOT_HOST', 'Only the host can deal again');
+    }
+
+    this.#clock.clearTimeout(this.#timer);
+    this.#timer = null;
+    this.#pendingEvents = [];
+    this.#armedMs = 0;
+    this.#clockLowFor = null;
+    this.#watchedSeat = null;
+    this.#lastRecheck = new Map();
+    this.#lastWatched = new Map();
+    if (telemetry !== undefined) this.#telemetry = telemetry;
+
+    const state = this.state;
+    state.players = state.players
+      .filter((player) => player.connected)
+      .map((player) => ({ ...player, ready: false, eliminatedAt: null, place: null, timeouts: 0 }));
+    state.status = 'LOBBY';
+    state.phase = 'LOBBY';
+    state.table = null;
+    state.presence = createPresence();
+    state.stress = createStress(this.#stressTuning);
+    state.dealer = createDealer(this.#clock.now());
+    state.composure = createComposure();
+    state.startingPlayers = 0;
+    state.sacrifices = 0;
+    state.clockElapsedMs = 0;
+    state.clockRunningSince = null;
+    state.actionDeadline = null;
+    state.runout = null;
+    state.lastResult = null;
+    state.winnerPlayerId = null;
+
+    this.#emit({ type: 'MATCH_RESET' });
+    this.#flush();
   }
 
   // -------------------------------------------------------------------------

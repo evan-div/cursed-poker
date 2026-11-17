@@ -321,6 +321,8 @@ input[type="range"] { padding: 0; accent-color: var(--brass); background: none; 
   pointer-events: auto;
 }
 .hud-winner .winner-line { color: #f0c4bc; font-size: 21px; font-style: italic; letter-spacing: 0.02em; }
+.hud-winner .winner-note { color: var(--ink-dim); font-size: 13px; font-style: italic; margin-top: -8px; }
+.hud-winner button.primary { padding: 11px 26px; font-size: 16px; }
 
 /* --- the front door (plain DOM, before the table) ------------------------- */
 

@@ -232,12 +232,17 @@ decisions in `HANDOFF.md` §8 are waiting on exactly this, and so is every
 
 ### 5.3 Smaller things, each a real gap
 
-- **No rematch.** A finished match ends at a banner. The same six people have
-  to make a new lobby and pass a new code round.
-- **An all-in runout arrives all at once.** When everybody is all-in the flop,
-  turn and river land in one update. It is the most dramatic moment in poker,
-  in a horror game, and it is over in a frame. Staging the reveal is
-  presentation only — the cards are already public — and would be worth a lot.
+- **No rematch — done.** The host can lay the table again from the result
+  screen: same room, same code, everybody still connected back in the lobby in
+  the chair they had. Nothing else carries over, and each reset has a test that
+  fails without it. Anybody who has gone is not waited for, and if it was the
+  host who went, the chair passes on.
+- **An all-in runout arrived all at once — done.** The hands go face up, each
+  street is left on the table to be looked at, and only then is anybody told
+  who won. It is held back at the projection boundary rather than animated on
+  the client, because the board, the stacks, the hand names and everybody's
+  tells could each give the ending away early; each was checked by breaking it.
+  The engine is untouched. See `server/src/match/runout.ts`.
 - **Every hand is shown at showdown.** There is no mucking. That is a legitimate
   house rule, but it is a rule nobody chose; it deserves a decision.
 - **`PlayerRecord.timeouts` is counted and never read.** Either the sit-out
@@ -280,8 +285,8 @@ The nine in `HANDOFF.md` §8 stand. What this audit adds or changes:
 | 9 | Branch hygiene | **More urgent.** There are now three branches and the default is still Phase 2. Open a PR from `claude/vigilant-bell-l3ldus`, which contains everything, and make its target the default. |
 | 10 | Is the look right? | Yours to judge. The palette, the faces, how dark the room gets and how early are all taste, and all in a handful of constants: `ROOM` in `table.ts`, `LIGHTS` in `room-shell.ts`, `GRADE`/`BLOOM` in `post.ts`, `LOOKS` in `figure.ts`. |
 | 11 | Muck or show at showdown? | Show, as now, for a game about reading people — but decide it. |
-| 12 | Stage all-in runouts? | Yes. |
-| 13 | Rematch in the same lobby? | Yes, before a second playtest. |
+| 12 | Stage all-in runouts? | Done. The pace is three numbers in `MatchTimings` and wants a human's opinion. |
+| 13 | Rematch in the same lobby? | Done. |
 
 ---
 
@@ -290,7 +295,7 @@ The nine in `HANDOFF.md` §8 stand. What this audit adds or changes:
 ```bash
 npm install
 npm run typecheck        # clean
-npm test                 # 612 tests, 51 files
+npm test                 # 646 tests, 53 files
 npm audit                # 0
 npm --workspace @cursed/client run build
 

@@ -230,6 +230,8 @@ export class GameServer {
         return this.#setReady(state, parsed.data as { ready: boolean }, ack);
       case 'lobby:start':
         return this.#start(state, ack);
+      case 'lobby:rematch':
+        return this.#rematch(state, ack);
       case 'poker:action':
         return this.#action(state, parsed.data as { handNumber: number; action: never }, ack);
       case 'poker:peek':
@@ -300,6 +302,13 @@ export class GameServer {
   #start(state: ConnectionState, ack?: AckFn): void {
     const { room, playerId } = this.#require(state);
     room.match.start(playerId);
+    this.#ok(ack);
+  }
+
+  #rematch(state: ConnectionState, ack?: AckFn): void {
+    const { room, playerId } = this.#require(state);
+    room.rematch(playerId);
+    this.rooms.touch(room.code);
     this.#ok(ack);
   }
 

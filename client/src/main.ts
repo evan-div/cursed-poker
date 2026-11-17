@@ -96,6 +96,14 @@ function handlingChips(handling: boolean): void {
 // ---------------------------------------------------------------------------
 
 connection.onView = (next) => {
+  // The table has been laid again. What was said over the last evening is not
+  // part of this one.
+  if (view && view.room.status !== 'LOBBY' && next.room.status === 'LOBBY') {
+    log = [];
+    logVersion = 0;
+    peekedHand = 0;
+    banner = null;
+  }
   view = next;
   setServerTime(next.serverTime);
   pendingAction = false;
@@ -204,6 +212,12 @@ async function requestPeek(): Promise<void> {
   if (!response.ok) peekedHand = 0;
 }
 
+/** "Deal again." The server decides whether this player may ask. */
+async function rematch(): Promise<void> {
+  const response = await connection.send('lobby:rematch', {});
+  if (!response.ok) setBanner(response.message, 'error');
+}
+
 async function submit(action: PlayerAction): Promise<void> {
   if (!view?.hand || pendingAction) return;
   pendingAction = true;
@@ -308,7 +322,7 @@ function renderTable(current: ClientView): void {
   if (banner) stage.append(bannerElement(banner));
   hud?.update(
     { view: current, log, logVersion, connected, pendingAction, pointerLocked },
-    { submit, handlingChips, leave: leaveTable },
+    { submit, handlingChips, leave: leaveTable, rematch: () => void rematch() },
   );
 }
 

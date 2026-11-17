@@ -24,7 +24,7 @@ git fetch origin claude/vigilant-bell-l3ldus
 git checkout claude/vigilant-bell-l3ldus
 npm install
 npm run typecheck     # clean
-npm test              # 612 tests, 51 files, all passing
+npm test              # 646 tests, 53 files, all passing
 npm audit             # 0
 ```
 
@@ -121,6 +121,8 @@ everyone's screen at that moment would itself be a leak.
 |---|---|---|---|
 | Poker engine | `server/src/poker/` | — | `poker-types.ts`, `cards.ts`, `blinds.ts` |
 | Match state machine, timers | `match/match.ts`, `match-state.ts` | — | `view.ts` |
+| All-in runouts, told a street at a time | `match/runout.ts`, `#concludeHand` in `match.ts`, and the `runout` branch of `projectHand` | follows the view; nothing special | `HandView.allInRunout` |
+| Rematch | `Match#rematch`, `Room.rematch` in `net/rooms.ts` | `winnerBanner` in `ui/hud.ts` | `lobby:rematch` |
 | The boundary | `match/projection.ts` | — | — |
 | Bodies / presence | `match/presence.ts` | `interaction/presence-reporter.ts`, `scene/avatar.ts` | `presence.ts` |
 | Card peeking | `match/presence.ts` (looks) | `interaction/peek.ts`, `card-peek-controller.ts`, `scene/hold.ts`, `cards.ts` | `presence.ts` (`PEEK`, `HAND_LIFT`) |
@@ -256,8 +258,7 @@ is in the code now.
 | 9 | Branch hygiene: make `claude/vigilant-bell-l3ldus` the default (or merge it), so new sessions and clones start on the real code | Not done; needs the owner. Three branches deep now |
 | 10 | Is the look right? Palette, faces, how dark and how early | In constants; see `AUDIT.md` §6 |
 | 11 | Muck or show every hand at showdown? | Show |
-| 12 | Stage an all-in runout street by street? | Not staged: it all arrives at once |
-| 13 | Rematch in the same lobby? | No: a finished match ends at a banner |
+| 12 | How fast should an all-in runout be told? | 2.2 s with the hands up, 2.6 s a street, 1.6 s before the verdict: `runoutRevealMs`, `runoutStreetMs`, `runoutSettleMs` in `DEFAULT_TIMINGS`. Untested on people |
 
 Longer-horizon decisions that can safely wait are in `ARCHITECTURE.md` §11.
 

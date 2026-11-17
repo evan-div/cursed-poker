@@ -133,6 +133,14 @@ export const setReadySchema = z.object({ ready: z.boolean() });
 export const startMatchSchema = z.object({});
 
 /**
+ * "Deal again."
+ *
+ * Empty, like starting: who may ask and when are the server's to decide, and
+ * who comes back is whoever is still connected.
+ */
+export const rematchSchema = z.object({});
+
+/**
  * `handNumber` makes the action idempotent against the hand it was decided in.
  * Without it a laggy client can fold a hand that already ended and have the
  * fold land on the next one.
@@ -159,6 +167,7 @@ export const CLIENT_MESSAGE_SCHEMAS = {
   'lobby:resume': resumeSessionSchema,
   'lobby:ready': setReadySchema,
   'lobby:start': startMatchSchema,
+  'lobby:rematch': rematchSchema,
   'poker:action': submitActionSchema,
   'poker:peek': peekSchema,
   'player:presence': presenceUpdateSchema,
@@ -234,7 +243,9 @@ export type LobbyEvent =
    * worth: that is for the board to say, a street at a time.
    */
   | { type: 'ALL_IN_SHOWDOWN'; hands: { seatIndex: number; holeCards: Card[] }[] }
-  | { type: 'MATCH_ENDED'; winnerPlayerId: string };
+  | { type: 'MATCH_ENDED'; winnerPlayerId: string }
+  /** The host has laid the table again: same room, same people, a new evening. */
+  | { type: 'MATCH_RESET' };
 
 export type MatchEvent = HandEvent | LobbyEvent;
 

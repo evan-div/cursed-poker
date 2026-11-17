@@ -35,6 +35,14 @@ export interface Room {
   match: Match;
   /** Writes this match's stress recording, once. A no-op without a sink. */
   saveStress: () => void;
+  /**
+   * Lays the table again, on the host's say-so. See `Match#rematch`.
+   *
+   * Goes through the room rather than straight to the match because a new
+   * evening is a new recording: the one just finished has been saved, and the
+   * next starts empty.
+   */
+  rematch: (playerId: string) => void;
   createdAt: number;
   /** When the room last had a connected player, for sweeping. */
   lastOccupiedAt: number;
@@ -55,7 +63,7 @@ export class RoomManager {
   create(hostPlayerId: string): Room {
     const code = this.#allocateCode();
     const sink = this.#options.stressLogs;
-    const recorder = sink ? new StressRecorder({ tuning: resolveTuning() }) : null;
+    let recorder = sink ? new StressRecorder({ tuning: resolveTuning() }) : null;
     const match = new Match({
       roomCode: code,
       hostPlayerId,
@@ -83,8 +91,19 @@ export class RoomManager {
       });
     }
 
+    const rematch = (playerId: string): void => {
+      // The evening that just ended is kept before anything is thrown away. It
+      // normally has been already; this is for the path that did not.
+      saveStress();
+      const next = sink ? new StressRecorder({ tuning: resolveTuning() }) : null;
+      // Refuses by throwing, in which case nothing below has happened yet.
+      match.rematch(playerId, next);
+      recorder = next;
+      saved = false;
+    };
+
     const now = this.#options.clock.now();
-    const room: Room = { code, match, saveStress, createdAt: now, lastOccupiedAt: now };
+    const room: Room = { code, match, saveStress, rematch, createdAt: now, lastOccupiedAt: now };
     this.#rooms.set(code, room);
     return room;
   }

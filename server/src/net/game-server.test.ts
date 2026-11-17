@@ -231,3 +231,98 @@ describe('when the server itself breaks', () => {
     expect(reply.message).toMatch(/at least/);
   });
 });
+
+describe('playing again', () => {
+  const SHORT = {
+    id: 'short',
+    label: 'Short',
+    startingStackBigBlinds: 2,
+    levels: [{ level: 1, smallBlind: 50, bigBlind: 100, ante: 0, durationSeconds: 36_000 }],
+  };
+
+  /** Shoves every hand until somebody has everything. */
+  function playOut(h: ReturnType<typeof harness>, code: string): void {
+    const match = h.server.rooms.get(code)!.match;
+    for (let guard = 0; match.state.status !== 'FINISHED' && guard < 5_000; guard++) {
+      const hand = match.state.table?.hand;
+      const actor = match.state.players.find((p) => p.seatIndex === hand?.actingSeat);
+      if (hand && actor) match.submitAction(actor.playerId, hand.handNumber, { type: 'ALL_IN' });
+      else h.clock.advance(100);
+    }
+    expect(match.state.status).toBe('FINISHED');
+  }
+
+  function finishedTable(saved?: unknown[]) {
+    const clock = new ManualClock();
+    const transport = new FakeTransport();
+    const server = new GameServer({
+      transport,
+      clock,
+      presenceHz: 0,
+      sessionSecret: 'a-secret-long-enough-for-tests',
+      structure: SHORT,
+      ...(saved ? { stressLogs: { save: async (log: unknown) => void saved.push(log) } } : {}),
+    });
+    const h = { clock, transport, server };
+    const lobby = fullLobby(h);
+    lobby.host.request('lobby:start');
+    playOut(h, lobby.code);
+    return { h, ...lobby };
+  }
+
+  it('takes everybody back to the lobby when the host asks', () => {
+    const { host, all, code } = finishedTable();
+    expect(host.view!.room.status).toBe('FINISHED');
+
+    expect(host.request('lobby:rematch')).toEqual({ ok: true });
+    for (const connection of all) {
+      const view = connection.view!;
+      expect(view.room.status).toBe('LOBBY');
+      expect(view.room.code).toBe(code);
+      expect(view.players).toHaveLength(4);
+      expect(view.players.every((p) => !p.ready && p.seated)).toBe(true);
+      expect(view.hand).toBeNull();
+    }
+  });
+
+  it('is not something a guest can ask for', () => {
+    const { others, host } = finishedTable();
+    expect(others[0]!.request('lobby:rematch')).toMatchObject({ ok: false, code: 'NOT_HOST' });
+    expect(host.view!.room.status).toBe('FINISHED');
+  });
+
+  it('leaves behind whoever closed the tab, and lets the rest start again', () => {
+    const { h, host, others, code } = finishedTable();
+    others[2]!.close();
+    host.request('lobby:rematch');
+
+    expect(host.view!.players).toHaveLength(3);
+    // Three is one short of a table: somebody new can take the empty chair.
+    const newcomer = h.transport.connect();
+    expect(newcomer.request('lobby:join', { code, displayName: 'New' }).ok).toBe(true);
+    for (const connection of [host, others[0]!, others[1]!, newcomer]) connection.request('lobby:ready', { ready: true });
+    expect(host.request('lobby:start')).toEqual({ ok: true });
+    expect(host.view!.room.status).toBe('IN_PROGRESS');
+    expect(host.view!.hand!.handNumber).toBe(1);
+  });
+
+  it('keeps one recording for each evening', () => {
+    const saved: unknown[] = [];
+    const { h, host, all, code } = finishedTable(saved);
+    expect(saved).toHaveLength(1);
+
+    host.request('lobby:rematch');
+    // A lobby is not an evening.
+    expect(saved).toHaveLength(1);
+    for (const connection of all) connection.request('lobby:ready', { ready: true });
+    host.request('lobby:start');
+    playOut(h, code);
+
+    expect(saved).toHaveLength(2);
+    // And the second is its own, not the first with more on the end.
+    expect(saved[1]).not.toBe(saved[0]);
+    const entries = (log: unknown) => (log as { entries: unknown[] }).entries.length;
+    expect(entries(saved[1])).toBeGreaterThan(0);
+    expect(entries(saved[0])).toBeGreaterThan(0);
+  });
+});

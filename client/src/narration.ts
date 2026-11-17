@@ -57,6 +57,8 @@ export function describeEvent(event: MatchEvent, view: ClientView | null): LogLi
       return line(`${named(event.playerId)} is taken. Finished ${ordinal(event.place)}.`);
     case 'MATCH_ENDED':
       return line(`${named(event.winnerPlayerId)} is the last one at the table.`);
+    case 'MATCH_RESET':
+      return line('The table is laid again.');
     case 'ALL_IN_SHOWDOWN':
       // The hands, and no verdict on them: the board has not finished speaking.
       return event.hands.flatMap((hand, index) =>
