@@ -1,5 +1,12 @@
 import { io, type Socket } from 'socket.io-client';
-import type { ClientMessageName, ClientView, MatchEvent, SessionGrant } from '@cursed/shared';
+import type {
+  ClientMessageName,
+  ClientView,
+  MatchEvent,
+  PresenceFrame,
+  SelfFrame,
+  SessionGrant,
+} from '@cursed/shared';
 
 /**
  * The client half of the transport seam.
@@ -11,13 +18,31 @@ import type { ClientMessageName, ClientView, MatchEvent, SessionGrant } from '@c
 
 export type Ack<T> = ({ ok: true } & T) | { ok: false; code: string; message: string };
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? 'http://localhost:3001';
+/**
+ * Where the server is.
+ *
+ * Built for real, the client is served by the game server itself, so the
+ * answer is "wherever this page came from" and nothing has to be configured —
+ * which is what lets one link be the whole invitation. At a desk the page comes
+ * from Vite and the server is the same machine on another port; the host is
+ * taken from the address bar rather than assumed to be `localhost`, so a
+ * second laptop on the same network can join a game being developed on the
+ * first. `VITE_SERVER_URL` overrides both, for a client hosted apart from its
+ * server.
+ */
+const SERVER_URL: string =
+  import.meta.env.VITE_SERVER_URL ??
+  (import.meta.env.DEV ? `${location.protocol}//${location.hostname}:3001` : location.origin);
 const TOKEN_KEY = 'cursed-poker.session';
 
 export class GameConnection {
   readonly socket: Socket;
   onView: (view: ClientView) => void = () => {};
   onEvents: (events: MatchEvent[]) => void = () => {};
+  /** The table's bodies, on the server's tick. Public state, so no secrets here. */
+  onPresence: (frame: PresenceFrame) => void = () => {};
+  /** Your own heart, and nobody else's. Sent to this socket alone. */
+  onSelf: (frame: SelfFrame) => void = () => {};
   onError: (error: { code: string; message: string }) => void = () => {};
   onStatus: (connected: boolean) => void = () => {};
 
@@ -25,6 +50,8 @@ export class GameConnection {
     this.socket = io(SERVER_URL, { transports: ['websocket'] });
     this.socket.on('view', (view: ClientView) => this.onView(view));
     this.socket.on('events', (events: MatchEvent[]) => this.onEvents(events));
+    this.socket.on('presence', (frame: PresenceFrame) => this.onPresence(frame));
+    this.socket.on('self', (frame: SelfFrame) => this.onSelf(frame));
     this.socket.on('error', (error: { code: string; message: string }) => this.onError(error));
     this.socket.on('connect', () => {
       this.onStatus(true);
@@ -37,6 +64,24 @@ export class GameConnection {
     return new Promise((resolve) => {
       this.socket.emit(name, payload, (response: Ack<T>) => resolve(response));
     });
+  }
+
+  /**
+   * Fire-and-forget, for the body report.
+   *
+   * Fifteen a second, and nothing useful to do with a reply: a dropped report
+   * is corrected by the next one 66ms later, and waiting on acks would queue
+   * promises faster than they resolved on a bad connection.
+   *
+   * Not `socket.volatile.emit`, which is what this looks like it wants. Volatile
+   * packets are dropped whenever the transport is not immediately writable, and
+   * it turned out to drop *all* of them here — the whole tell system was silently
+   * inert, with no error anywhere, until the server was instrumented to count
+   * what arrived. A channel that fails closed and says nothing is a bad trade for
+   * saving a few bytes on a stalled connection.
+   */
+  tell(name: ClientMessageName, payload: unknown): void {
+    this.socket.emit(name, payload);
   }
 
   /** Reconnecting is automatic: the seat is held, and so are the cards. */
@@ -53,5 +98,21 @@ export class GameConnection {
 
   forgetSession(): void {
     localStorage.removeItem(TOKEN_KEY);
+  }
+
+  /**
+   * Gets up and walks out.
+   *
+   * There is no "leave" message and there does not need to be: the server
+   * already treats a closed connection as a departure — out of a lobby
+   * altogether, away from a match with the seat held. What was missing was the
+   * client ever letting go. It kept the session token for ever, so a finished
+   * match, or one a player had busted out of, was resumed on every reload and
+   * there was no way back to the front door short of clearing site data.
+   */
+  leave(): void {
+    this.forgetSession();
+    this.socket.disconnect();
+    this.socket.connect();
   }
 }

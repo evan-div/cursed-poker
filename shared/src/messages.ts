@@ -10,21 +10,18 @@
  * boundary — the client is free to believe the server.
  */
 import { z } from 'zod';
+import type { SelfFrame } from './stress.js';
 import type { ClientView } from './view.js';
 import type { HandEvent } from './hand-events.js';
-import { MAX_PLAYERS } from './config.js';
+import type { Card } from './cards.js';
+import type { PresenceFrame } from './presence.js';
+import { MAX_PLAYERS, ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, SEAT_COUNT } from './config.js';
+import { COMPOSURE_INPUTS } from './composure.js';
 
 // ---------------------------------------------------------------------------
 // Primitives
 // ---------------------------------------------------------------------------
 
-/**
- * Lobby code alphabet, chosen to survive being read aloud: no 0/O, no 1/I/L.
- * 31^6 is about 887 million codes, which with join rate limiting is enough that
- * guessing a live lobby is not a practical attack.
- */
-export const ROOM_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-export const ROOM_CODE_LENGTH = 6;
 
 export const roomCodeSchema = z
   .string()
@@ -55,6 +52,73 @@ export const playerActionSchema = z.discriminatedUnion('type', [
 // Client -> server
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a player is looking, as a target rather than a vector.
+ *
+ * See `presence.ts` for why this is coarse. The seat index is bounded here so a
+ * malformed or hostile client cannot make the server carry an arbitrary number
+ * into the presence frame every other player renders.
+ */
+export const gazeTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('SEAT'), seatIndex: z.number().int().min(0).max(SEAT_COUNT - 1) }),
+  z.object({ kind: z.literal('DEALER') }),
+  z.object({ kind: z.literal('BOARD') }),
+  z.object({ kind: z.literal('POT') }),
+  z.object({ kind: z.literal('OWN_CARDS') }),
+  z.object({ kind: z.literal('OWN_CHIPS') }),
+  z.object({ kind: z.literal('AWAY') }),
+]);
+
+/**
+ * A player's own body, reported to the server.
+ *
+ * This is the one message a client sends many times a second, and the only one
+ * whose contents are *about* the player rather than about poker. It cannot
+ * change a chip, a card or a turn — the server rejects nothing here because
+ * there is nothing here to reject beyond its own shape.
+ */
+export const presenceUpdateSchema = z.object({
+  gaze: gazeTargetSchema,
+  peek: z.number().min(0).max(1),
+  lift: z.number().min(0).max(1),
+  lean: z.number().min(0).max(1),
+  handlingChips: z.boolean(),
+});
+
+/**
+ * "I am lifting my cards."
+ *
+ * The server answers by marking the seat as having looked, which puts the
+ * player's own hole cards into their next projected view. It does *not* answer
+ * with the cards: acks are not a path for match state, and adding a second path
+ * would end the single-boundary guarantee this project rests on.
+ */
+export const peekSchema = z.object({
+  handNumber: z.number().int().positive(),
+});
+
+/**
+ * "Let me steady myself."
+ *
+ * Empty on purpose: the player does not get to choose the challenge, its
+ * difficulty or its kind. The server picks, and the reply is a fresh view
+ * containing it.
+ */
+export const beginComposureSchema = z.object({});
+
+/**
+ * A key going down or coming up, during a composure challenge.
+ *
+ * Deliberately without a timestamp. The server times every input by when it
+ * arrived, and judges intervals between inputs so latency cancels; a client's
+ * own clock is not evidence of anything. Nor is there any way to say how it
+ * went — see `composure.ts`.
+ */
+export const composureInputSchema = z.object({
+  challengeId: z.string().min(1).max(32),
+  input: z.enum(COMPOSURE_INPUTS),
+});
+
 export const createLobbySchema = z.object({ displayName: displayNameSchema });
 
 export const joinLobbySchema = z.object({
@@ -69,6 +133,14 @@ export const setReadySchema = z.object({ ready: z.boolean() });
 export const startMatchSchema = z.object({});
 
 /**
+ * "Deal again."
+ *
+ * Empty, like starting: who may ask and when are the server's to decide, and
+ * who comes back is whoever is still connected.
+ */
+export const rematchSchema = z.object({});
+
+/**
  * `handNumber` makes the action idempotent against the hand it was decided in.
  * Without it a laggy client can fold a hand that already ended and have the
  * fold land on the next one.
@@ -78,12 +150,15 @@ export const submitActionSchema = z.object({
   action: playerActionSchema,
 });
 
+export type PresenceUpdatePayload = z.infer<typeof presenceUpdateSchema>;
+export type PeekPayload = z.infer<typeof peekSchema>;
 export type CreateLobbyPayload = z.infer<typeof createLobbySchema>;
 export type JoinLobbyPayload = z.infer<typeof joinLobbySchema>;
 export type ResumeSessionPayload = z.infer<typeof resumeSessionSchema>;
 export type SetReadyPayload = z.infer<typeof setReadySchema>;
 export type StartMatchPayload = z.infer<typeof startMatchSchema>;
 export type SubmitActionPayload = z.infer<typeof submitActionSchema>;
+export type ComposureInputPayload = z.infer<typeof composureInputSchema>;
 
 /** Every inbound message name, paired with the schema that validates it. */
 export const CLIENT_MESSAGE_SCHEMAS = {
@@ -92,8 +167,21 @@ export const CLIENT_MESSAGE_SCHEMAS = {
   'lobby:resume': resumeSessionSchema,
   'lobby:ready': setReadySchema,
   'lobby:start': startMatchSchema,
+  'lobby:rematch': rematchSchema,
   'poker:action': submitActionSchema,
+  'poker:peek': peekSchema,
+  'player:presence': presenceUpdateSchema,
+  'composure:begin': beginComposureSchema,
+  'composure:input': composureInputSchema,
 } as const;
+
+/**
+ * Messages that describe a body rather than a decision.
+ *
+ * They arrive at fifteen a second and are metered separately, so a player
+ * turning their head cannot use up the budget they need to fold.
+ */
+export const PRESENCE_MESSAGES = new Set<ClientMessageName>(['player:presence']);
 
 export type ClientMessageName = keyof typeof CLIENT_MESSAGE_SCHEMAS;
 
@@ -116,6 +204,7 @@ export const ERROR_CODES = [
   'NOT_HOST',
   'NOT_ENOUGH_PLAYERS',
   'NOT_YOUR_TURN',
+  'NOT_READY',
   'ILLEGAL_ACTION',
   'STALE_HAND',
   'RATE_LIMITED',
@@ -148,7 +237,15 @@ export type LobbyEvent =
   | { type: 'BLIND_LEVEL_UP'; level: number; smallBlind: number; bigBlind: number; ante: number }
   | { type: 'PLAYER_TIMED_OUT'; seatIndex: number; forcedFold: boolean }
   | { type: 'PLAYER_ELIMINATED'; playerId: string; seatIndex: number; place: number }
-  | { type: 'MATCH_ENDED'; winnerPlayerId: string };
+  /**
+   * Nobody left in the hand can bet, so the hands go face up and the rest of
+   * the board is run out. Carries the cards and nothing about what they are
+   * worth: that is for the board to say, a street at a time.
+   */
+  | { type: 'ALL_IN_SHOWDOWN'; hands: { seatIndex: number; holeCards: Card[] }[] }
+  | { type: 'MATCH_ENDED'; winnerPlayerId: string }
+  /** The host has laid the table again: same room, same people, a new evening. */
+  | { type: 'MATCH_RESET' };
 
 export type MatchEvent = HandEvent | LobbyEvent;
 
@@ -157,6 +254,22 @@ export interface ServerMessages {
   view: (view: ClientView) => void;
   /** Narration for animation and the log. Never a source of truth. */
   events: (events: MatchEvent[]) => void;
+  /**
+   * Everybody's body, on a fixed tick.
+   *
+   * Split from `view` because it changes at a completely different rate: a full
+   * view for six players fifteen times a second would be most of a megabit for
+   * a game where nothing had happened. Every field in it is public.
+   */
+  presence: (frame: PresenceFrame) => void;
+  /**
+   * Your own body, and nobody else's.
+   *
+   * The private counterpart to `presence`: sent per connection, never
+   * broadcast, carrying only the receiving player's own heart. See `SelfFrame`
+   * for why it cannot simply ride the view.
+   */
+  self: (frame: SelfFrame) => void;
   error: (error: { code: ErrorCode; message: string }) => void;
 }
 

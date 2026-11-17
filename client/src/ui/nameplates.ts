@@ -21,15 +21,28 @@ import { chips, el } from './dom.js';
  */
 const PLATE_HEIGHT = 0.98;
 
+/**
+ * How close to the top of the screen a plate may sit, in pixels.
+ *
+ * The bar across the top is drawn over the plates, so a player sitting opposite
+ * — whose plate lands highest — used to have their name printed underneath the
+ * blind level and their stack underneath the pot.
+ */
+const TOP_MARGIN = 92;
+const SIDE_MARGIN = 56;
+
 interface Plate {
   root: HTMLElement;
   world: Vector3;
+  /** The acting player's clock: a bar along the bottom edge of their plate. */
+  clock: HTMLElement;
 }
 
 export class Nameplates {
   readonly root = el('div', 'nameplates');
   #plates = new Map<number, Plate>();
   #projected = new Vector3();
+  #clockSeat: number | null = null;
 
   /** Rebuilds the labels. Call when the view changes, not every frame. */
   update(view: ClientView): void {
@@ -47,7 +60,7 @@ export class Nameplates {
       let plate = this.#plates.get(seat.seatIndex);
       if (!plate) {
         const at = seatPoint(seat.seatIndex, RADIUS.body, PLATE_HEIGHT);
-        plate = { root: el('div', 'plate'), world: new Vector3(at.x, at.y, at.z) };
+        plate = { root: el('div', 'plate'), world: new Vector3(at.x, at.y, at.z), clock: el('span', 'plate-clock') };
         this.root.append(plate.root);
         this.#plates.set(seat.seatIndex, plate);
       }
@@ -67,10 +80,29 @@ export class Nameplates {
       plate.root.style.display = behind || offscreen ? 'none' : '';
       if (behind || offscreen) continue;
 
-      const x = (this.#projected.x * 0.5 + 0.5) * width;
-      const y = (-this.#projected.y * 0.5 + 0.5) * height;
+      const x = Math.min(Math.max((this.#projected.x * 0.5 + 0.5) * width, SIDE_MARGIN), width - SIDE_MARGIN);
+      const y = Math.max((-this.#projected.y * 0.5 + 0.5) * height, TOP_MARGIN);
       plate.root.style.transform = `translate(-50%, -100%) translate(${x}px, ${y}px)`;
     }
+  }
+
+  /**
+   * Shows how long whoever is acting has left, on their own plate.
+   *
+   * `fraction` is what remains of their clock, 1..0; `seatIndex` null clears
+   * it. Cheap enough to call every frame: it writes one transform.
+   */
+  setClock(seatIndex: number | null, fraction: number, low: boolean): void {
+    if (this.#clockSeat !== seatIndex) {
+      if (this.#clockSeat !== null) this.#plates.get(this.#clockSeat)?.root.classList.remove('on-clock', 'clock-low');
+      this.#clockSeat = seatIndex;
+    }
+    if (seatIndex === null) return;
+    const plate = this.#plates.get(seatIndex);
+    if (!plate) return;
+    plate.root.classList.add('on-clock');
+    plate.root.classList.toggle('clock-low', low);
+    plate.clock.style.transform = `scaleX(${Math.min(Math.max(fraction, 0), 1).toFixed(4)})`;
   }
 
   #paint(plate: Plate, seat: SeatView, view: ClientView): void {
@@ -80,6 +112,7 @@ export class Nameplates {
     if (!seat.connected) classes.push('away');
     if (view.hand?.actingSeat === seat.seatIndex) classes.push('acting');
     if (seat.playerId === view.you.playerId) classes.push('me');
+    if (this.#clockSeat === seat.seatIndex) classes.push('on-clock');
     plate.root.className = classes.join(' ');
 
     plate.root.replaceChildren();
@@ -95,5 +128,6 @@ export class Nameplates {
         el('span', 'plate-category', seat.handCategory.replaceAll('_', ' ').toLowerCase()),
       );
     }
+    plate.root.append(plate.clock);
   }
 }

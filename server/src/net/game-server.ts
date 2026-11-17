@@ -1,15 +1,21 @@
 import {
   CLIENT_MESSAGE_SCHEMAS,
+  PRESENCE,
+  STRESS,
+  PRESENCE_MESSAGES,
   type BlindStructure,
   type ClientMessageName,
+  type ComposureInputPayload,
   type ErrorCode,
   type MatchEvent,
+  type PresenceInput,
 } from '@cursed/shared';
 import { MatchError, type MatchTimings } from '../match/match.js';
-import { SystemClock, type Clock } from '../match/clock.js';
+import { SystemClock, type Clock, type TimerHandle } from '../match/clock.js';
 import type { RandomSource } from '../poker/index.js';
 import { RateLimiter } from './rate-limit.js';
 import { RoomManager, type Room } from './rooms.js';
+import type { StressLogSink } from './stress-log-sink.js';
 import { SessionManager, newPlayerId } from './sessions.js';
 import type { AckFn, Connection, Transport } from './transport.js';
 
@@ -33,6 +39,24 @@ export interface GameServerOptions {
   messagesPerSecond?: number;
   /** Lobby create/join attempts allowed per address per minute. */
   joinsPerMinute?: number;
+  /**
+   * Body reports allowed per second per connection.
+   *
+   * Metered separately from everything else. Presence arrives fifteen times a
+   * second by design, and if it shared a bucket with poker actions then turning
+   * your head would eat the budget you need to fold.
+   */
+  presencePerSecond?: number;
+  /** How often the table's bodies are broadcast. Zero disables the tick. */
+  presenceHz?: number;
+  /** Where to keep each match's stress recording. See `stress-telemetry.ts`. */
+  stressLogs?: StressLogSink;
+  /**
+   * Told about every failure that was the server's own fault, with the name of
+   * the message that provoked it. Defaults to the console. The client is told
+   * only that something went wrong — see `#onConnection`.
+   */
+  onInternalError?: (error: unknown, message: string) => void;
 }
 
 interface ConnectionState {
@@ -53,10 +77,20 @@ export class GameServer {
   readonly #unsubscribes = new Map<string, () => void>();
   readonly #messageLimiter: RateLimiter;
   readonly #joinLimiter: RateLimiter;
+  readonly #presenceLimiter: RateLimiter;
+  readonly #presenceIntervalMs: number;
+  readonly #onInternalError: (error: unknown, message: string) => void;
+  #presenceTimer: TimerHandle | null = null;
+  /** Presence ticks between private self frames. See `STRESS.selfHz`. */
+  #selfEvery = 1;
+  #selfCountdown = 0;
 
   constructor(options: GameServerOptions) {
     this.#clock = options.clock ?? new SystemClock();
     this.#transport = options.transport;
+    this.#onInternalError =
+      options.onInternalError ??
+      ((error, message) => console.error(`[cursed-poker] internal error handling "${message}":`, error));
     this.sessions = new SessionManager(
       options.sessionSecret ? { secret: options.sessionSecret } : {},
     );
@@ -65,6 +99,7 @@ export class GameServer {
       ...(options.rng ? { rng: options.rng } : {}),
       ...(options.structure ? { structure: options.structure } : {}),
       ...(options.timings ? { timings: options.timings } : {}),
+      ...(options.stressLogs ? { stressLogs: options.stressLogs } : {}),
     });
 
     const perSecond = options.messagesPerSecond ?? 20;
@@ -80,10 +115,25 @@ export class GameServer {
       now: () => this.#clock.now(),
     });
 
+    // Headroom over the client's own send rate, so a burst after a stall is
+    // absorbed rather than dropped, but still a hard ceiling.
+    const presencePerSecond = options.presencePerSecond ?? PRESENCE.clientHz + 5;
+    this.#presenceLimiter = new RateLimiter({
+      capacity: presencePerSecond * 2,
+      refillPerSecond: presencePerSecond,
+      now: () => this.#clock.now(),
+    });
+
+    const presenceHz = options.presenceHz ?? PRESENCE.broadcastHz;
+    this.#presenceIntervalMs = presenceHz > 0 ? Math.round(1000 / presenceHz) : 0;
+    this.#selfEvery = Math.max(1, Math.round(presenceHz / STRESS.selfHz));
+
     this.#transport.onConnection((connection) => this.#onConnection(connection));
   }
 
   async close(): Promise<void> {
+    this.#clock.clearTimeout(this.#presenceTimer);
+    this.#presenceTimer = null;
     for (const unsubscribe of this.#unsubscribes.values()) unsubscribe();
     this.#unsubscribes.clear();
     for (const state of this.#states.values()) state.connection.close();
@@ -107,6 +157,7 @@ export class GameServer {
     }
     this.#messageLimiter.sweep();
     this.#joinLimiter.sweep();
+    this.#presenceLimiter.sweep();
   }
 
   // -------------------------------------------------------------------------
@@ -119,7 +170,17 @@ export class GameServer {
       try {
         this.#handle(state, name, payload, ack);
       } catch (error) {
-        this.#fail(state, ack, toErrorCode(error), (error as Error).message);
+        // A refusal the game made on purpose carries its own explanation, and
+        // the player is owed it. Anything else is a bug in here, and the text
+        // of an exception is a description of the inside of the server: it goes
+        // to whoever runs the server, never to whoever provoked it. It used to
+        // go to the client verbatim and to nobody else at all.
+        if (error instanceof MatchError) {
+          this.#fail(state, ack, error.code, error.message);
+          return;
+        }
+        this.#onInternalError(error, name);
+        this.#fail(state, ack, 'INTERNAL', 'Something went wrong on the server');
       }
     });
 
@@ -130,13 +191,25 @@ export class GameServer {
     if (!isClientMessage(name)) {
       return this.#fail(state, ack, 'BAD_REQUEST', `Unknown message "${name}"`);
     }
-    if (!this.#messageLimiter.tryConsume(state.connection.id)) {
+    // Bodies and decisions are metered separately; see `presencePerSecond`.
+    const isPresence = PRESENCE_MESSAGES.has(name);
+    const limiter = isPresence ? this.#presenceLimiter : this.#messageLimiter;
+
+    // A body report is sent unacknowledged fifteen times a second. Rejecting one
+    // out loud would put an error banner on a player's screen for turning their
+    // head, so an unacknowledged presence failure is simply dropped — the next
+    // report is 66ms away and will say the same thing.
+    const quiet = isPresence && !ack;
+
+    if (!limiter.tryConsume(state.connection.id)) {
+      if (quiet) return;
       return this.#fail(state, ack, 'RATE_LIMITED', 'Slow down');
     }
 
     // Untrusted input stops here: nothing below sees an unparsed payload.
     const parsed = CLIENT_MESSAGE_SCHEMAS[name].safeParse(payload ?? {});
     if (!parsed.success) {
+      if (quiet) return;
       const issue = parsed.error.issues[0];
       return this.#fail(
         state,
@@ -157,8 +230,18 @@ export class GameServer {
         return this.#setReady(state, parsed.data as { ready: boolean }, ack);
       case 'lobby:start':
         return this.#start(state, ack);
+      case 'lobby:rematch':
+        return this.#rematch(state, ack);
       case 'poker:action':
         return this.#action(state, parsed.data as { handNumber: number; action: never }, ack);
+      case 'poker:peek':
+        return this.#peek(state, parsed.data as { handNumber: number }, ack);
+      case 'player:presence':
+        return this.#presence(state, parsed.data as PresenceInput, ack);
+      case 'composure:begin':
+        return this.#beginComposure(state, ack);
+      case 'composure:input':
+        return this.#composureInput(state, parsed.data as ComposureInputPayload, ack);
     }
   }
 
@@ -222,6 +305,13 @@ export class GameServer {
     this.#ok(ack);
   }
 
+  #rematch(state: ConnectionState, ack?: AckFn): void {
+    const { room, playerId } = this.#require(state);
+    room.rematch(playerId);
+    this.rooms.touch(room.code);
+    this.#ok(ack);
+  }
+
   #action(
     state: ConnectionState,
     payload: { handNumber: number; action: never },
@@ -229,6 +319,40 @@ export class GameServer {
   ): void {
     const { room, playerId } = this.#require(state);
     room.match.submitAction(playerId, payload.handNumber, payload.action);
+    this.#ok(ack);
+  }
+
+  #peek(state: ConnectionState, payload: { handNumber: number }, ack?: AckFn): void {
+    const { room, playerId } = this.#require(state);
+    // The cards are not in this reply. Marking the seat as having looked causes
+    // the match to push a fresh view, and the view is where the cards live.
+    room.match.peek(playerId, payload.handNumber);
+    this.#ok(ack);
+  }
+
+  #beginComposure(state: ConnectionState, ack?: AckFn): void {
+    const { room, playerId } = this.#require(state);
+    // The challenge is not in this reply either: it arrives in a view, to this
+    // player alone, like everything else they are allowed to know.
+    room.match.beginComposure(playerId);
+    this.#ok(ack);
+  }
+
+  #composureInput(state: ConnectionState, payload: ComposureInputPayload, ack?: AckFn): void {
+    // Timed by the match on arrival, which is the whole point: there is no
+    // field in this payload that says when, or how well.
+    const { room, playerId } = this.#require(state);
+    room.match.composureInput(playerId, payload.challengeId, payload.input);
+    this.#ok(ack);
+  }
+
+  #presence(state: ConnectionState, payload: PresenceInput, ack?: AckFn): void {
+    // Silently ignored outside a room: a body report is not worth an error, and
+    // a client that has not joined yet has nothing to report about.
+    if (state.roomCode && state.playerId) {
+      const room = this.rooms.get(state.roomCode);
+      room?.match.reportPresence(state.playerId, payload);
+    }
     this.#ok(ack);
   }
 
@@ -260,6 +384,14 @@ export class GameServer {
       previous.close();
     }
 
+    // One connection speaks for one seat. A connection that is already sitting
+    // somewhere else leaves there first — otherwise the old seat keeps this
+    // socket, keeps reading as connected after it closes, and its room can
+    // never be swept: a dozen ghosts a minute from anybody who asks.
+    if (state.roomCode && state.playerId && (state.roomCode !== room.code || state.playerId !== playerId)) {
+      this.#vacate(state.connection, state.roomCode, state.playerId);
+    }
+
     sockets.set(playerId, state.connection);
     state.roomCode = room.code;
     state.playerId = playerId;
@@ -267,25 +399,83 @@ export class GameServer {
     room.match.setConnected(playerId, true);
     this.rooms.touch(room.code);
     this.#push(room, [], playerId);
+    this.#startPresenceTick();
+  }
+
+  /**
+   * Broadcasts every occupied table's bodies on a fixed tick.
+   *
+   * Separate from the view push on purpose: presence changes fifteen times a
+   * second and a full view for six players does not. One frame, sent to
+   * everybody, because presence has no per-viewer half.
+   */
+  #startPresenceTick(): void {
+    if (this.#presenceTimer || this.#presenceIntervalMs <= 0) return;
+
+    const tick = () => {
+      this.#presenceTimer = null;
+      let talkedToAnyone = false;
+      // Slower than presence: a heart rate does not need twelve updates a
+      // second, and the client eases between them anyway.
+      this.#selfCountdown -= 1;
+      const sendSelf = this.#selfCountdown <= 0;
+      if (sendSelf) this.#selfCountdown = this.#selfEvery;
+
+      for (const [code, sockets] of this.#roomSockets) {
+        const room = this.rooms.get(code);
+        if (!room || sockets.size === 0) continue;
+        // The Dealer thinks on this tick too. He is a body at this table and
+        // he moves on the same clock the rest of them do.
+        room.match.tick();
+        const frame = room.match.presenceFor();
+        for (const connection of sockets.values()) connection.send('presence', frame);
+
+        // Each player's own heart, to that player and nobody else. Keyed by
+        // the player this socket belongs to — never by seat, never broadcast.
+        if (sendSelf) {
+          for (const [playerId, connection] of sockets) {
+            connection.send('self', room.match.selfFor(playerId));
+          }
+        }
+        talkedToAnyone = true;
+      }
+
+      // Nobody is listening. Stop rather than ticking twelve times a second at
+      // an empty process; `#attach` starts it again when somebody sits down.
+      if (!talkedToAnyone) return;
+      this.#presenceTimer = this.#clock.setTimeout(tick, this.#presenceIntervalMs);
+    };
+
+    this.#presenceTimer = this.#clock.setTimeout(tick, this.#presenceIntervalMs);
   }
 
   #onClose(state: ConnectionState): void {
     this.#states.delete(state.connection.id);
     this.#messageLimiter.forget(state.connection.id);
+    this.#presenceLimiter.forget(state.connection.id);
 
     if (!state.roomCode || !state.playerId) return;
-    const sockets = this.#roomSockets.get(state.roomCode);
-    if (sockets?.get(state.playerId)?.id === state.connection.id) {
-      sockets.delete(state.playerId);
-    }
+    this.#vacate(state.connection, state.roomCode, state.playerId);
+  }
 
-    const room = this.rooms.get(state.roomCode);
+  /**
+   * A connection stops speaking for a seat: it closed, or it sat down elsewhere.
+   *
+   * Only if it is still the one speaking for it. A connection that was replaced
+   * by a newer one for the same player has nothing left to take away.
+   */
+  #vacate(connection: Connection, roomCode: string, playerId: string): void {
+    const sockets = this.#roomSockets.get(roomCode);
+    if (sockets?.get(playerId)?.id !== connection.id) return;
+    sockets.delete(playerId);
+
+    const room = this.rooms.get(roomCode);
     if (!room) return;
 
     // Before the match starts a departure is a departure; after it, the seat and
     // its chips stay put and the player is simply gone for a while.
-    if (room.match.state.status === 'LOBBY') room.match.leave(state.playerId);
-    else room.match.setConnected(state.playerId, false);
+    if (room.match.state.status === 'LOBBY') room.match.leave(playerId);
+    else room.match.setConnected(playerId, false);
   }
 
   /** One subscription per room, pushing a freshly projected view to each player. */
@@ -293,7 +483,7 @@ export class GameServer {
     if (this.#unsubscribes.has(room.code)) return;
     this.#unsubscribes.set(
       room.code,
-      room.match.onUpdate((events) => this.#push(room, events)),
+      room.match.onUpdate((events, only) => this.#push(room, events, only)),
     );
   }
 
@@ -327,9 +517,4 @@ export class GameServer {
 
 function isClientMessage(name: string): name is ClientMessageName {
   return Object.hasOwn(CLIENT_MESSAGE_SCHEMAS, name);
-}
-
-function toErrorCode(error: unknown): ErrorCode {
-  if (error instanceof MatchError) return error.code;
-  return 'INTERNAL';
 }

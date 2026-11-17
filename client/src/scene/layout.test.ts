@@ -6,9 +6,11 @@ import {
   DEALER_STATION,
   RADIUS,
   STATION_COUNT,
+  CHIP_VALUES,
   boardCardPosition,
-  chipCountFor,
-  chipPile,
+  chipBreakdown,
+  chipHeap,
+  chipStacks,
   facingCentreYaw,
   seatAngle,
   seatStation,
@@ -141,44 +143,96 @@ describe('the board', () => {
 });
 
 describe('chips', () => {
-  it('scales the pile with the blinds, not the raw chip count', () => {
-    // A hundred big blinds looks the same at every level.
-    expect(chipCountFor(10_000, 100)).toBe(chipCountFor(100_000, 1_000));
-    expect(chipCountFor(0, 100)).toBe(0);
-    expect(chipCountFor(1, 100)).toBe(1); // never vanish entirely
-  });
+  const worth = (counts: readonly number[]) =>
+    counts.reduce((sum, count, i) => sum + count * CHIP_VALUES[i]!, 0);
 
-  it('caps the pile so a chip leader cannot flood the table', () => {
-    expect(chipCountFor(50_000_000, 100)).toBe(120);
-    expect(chipCountFor(50_000_000, 100, 40)).toBe(40);
-  });
-
-  it('handles a level with no blinds without dividing by zero', () => {
-    expect(chipCountFor(1_000, 0)).toBe(0);
-  });
-
-  it('stacks chips upward, then sideways', () => {
-    const pile = chipPile(CHIP.perStack + 1);
-    expect(pile).toHaveLength(CHIP.perStack + 1);
-
-    const first = pile.slice(0, CHIP.perStack);
-    expect(new Set(first.map((c) => c.x.toFixed(6))).size).toBe(1);
-    for (let i = 1; i < first.length; i++) {
-      expect(first[i]!.y).toBeGreaterThan(first[i - 1]!.y);
+  it('breaks an amount into chips that add up to it', () => {
+    for (const blinds of [0.25, 1, 2.5, 7, 20, 99.75, 100, 137, 300, 1_000]) {
+      const counts = chipBreakdown(blinds * 100, 100);
+      expect(worth(counts), `${blinds} big blinds`).toBe(blinds * 4);
+      for (const count of counts) {
+        expect(Number.isInteger(count)).toBe(true);
+        expect(count).toBeGreaterThanOrEqual(0);
+      }
     }
-    // The chip after a full stack starts a new one beside it, at the bottom.
-    expect(pile[CHIP.perStack]!.x).not.toBeCloseTo(first[0]!.x, 6);
-    expect(pile[CHIP.perStack]!.y).toBeCloseTo(first[0]!.y, 10);
   });
 
-  it('centres a pile of several stacks on its own position', () => {
-    const pile = chipPile(CHIP.perStack * 3);
-    const xs = [...new Set(pile.map((c) => c.x))];
-    expect(xs).toHaveLength(3);
-    expect(xs.reduce((a, b) => a + b, 0)).toBeCloseTo(0, 10);
+  it('scales the pile with the blinds, not the raw chip count', () => {
+    // A stack looks the same at every level: 100BB is 100BB.
+    expect(chipBreakdown(10_000, 100)).toEqual(chipBreakdown(100_000, 1_000));
+    expect(worth(chipBreakdown(0, 100))).toBe(0);
+    expect(worth(chipBreakdown(1, 100))).toBe(1); // never vanish entirely
+    expect(worth(chipBreakdown(1_000, 0))).toBe(0);
   });
 
-  it('never sinks a chip into the table', () => {
-    for (const chip of chipPile(45)) expect(chip.y).toBeGreaterThan(0);
+  it('gives a bigger stack more chips, and bigger chips', () => {
+    // The pile it replaced was a count capped at ninety, so everybody over
+    // twenty big blinds had the same stack. Size has to mean something.
+    const total = (blinds: number) => chipBreakdown(blinds * 100, 100).reduce((a, b) => a + b, 0);
+    const sizes = [1, 5, 20, 100, 300, 600].map(total);
+    for (let i = 1; i < sizes.length; i++) expect(sizes[i]).toBeGreaterThan(sizes[i - 1]!);
+
+    const short = chipBreakdown(1_000, 100);
+    const deep = chipBreakdown(60_000, 100);
+    expect(short[3]! + short[4]!).toBe(0);
+    expect(deep[3]! + deep[4]!).toBeGreaterThan(0);
+  });
+
+  it('keeps a stack a person could plausibly sit behind', () => {
+    for (const blinds of [100, 600, 5_000, 500_000]) {
+      const counts = chipBreakdown(blinds * 100, 100);
+      expect(chipStacks(counts).length).toBeLessThanOrEqual(120);
+      expect(chipHeap(counts, 60).length).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it('places every chip it was given, and no more', () => {
+    const counts = chipBreakdown(13_700, 100);
+    const total = counts.reduce((a, b) => a + b, 0);
+    for (const placed of [chipStacks(counts), chipHeap(counts)]) {
+      expect(placed).toHaveLength(total);
+      for (let d = 0; d < counts.length; d++) {
+        expect(placed.filter((chip) => chip.denomination === d)).toHaveLength(counts[d]!);
+      }
+    }
+  });
+
+  it('stacks chips upward, one colour to a stack', () => {
+    const placed = chipStacks([0, CHIP.perStack + 1, 0, 0, 0]);
+    // Twenty in the first stack, and the twenty-first starts another beside it.
+    const firstStack = placed.slice(0, CHIP.perStack);
+    for (let i = 1; i < firstStack.length; i++) {
+      expect(firstStack[i]!.y - firstStack[i - 1]!.y).toBeCloseTo(CHIP.height, 10);
+      expect(Math.abs(firstStack[i]!.x - firstStack[0]!.x)).toBeLessThan(0.002);
+    }
+    const overflow = placed[CHIP.perStack]!;
+    expect(overflow.y).toBeCloseTo(CHIP.height / 2, 10);
+    expect(Math.hypot(overflow.x - placed[0]!.x, overflow.z - placed[0]!.z)).toBeGreaterThan(CHIP.radius);
+  });
+
+  it('never sinks a chip into the table, or stands two in the same place', () => {
+    const counts = chipBreakdown(27_350, 100);
+    for (const placed of [chipStacks(counts), chipHeap(counts)]) {
+      for (const chip of placed) expect(chip.y).toBeGreaterThan(0);
+      const seen = new Set(placed.map((c) => `${c.x.toFixed(4)}:${c.y.toFixed(4)}:${c.z.toFixed(4)}`));
+      expect(seen.size).toBe(placed.length);
+    }
+  });
+
+  it('keeps separate stacks from standing inside each other', () => {
+    const placed = chipStacks(chipBreakdown(60_000, 100));
+    const bases = placed.filter((chip) => chip.y < CHIP.height);
+    for (let i = 0; i < bases.length; i++) {
+      for (let j = i + 1; j < bases.length; j++) {
+        const apart = Math.hypot(bases[i]!.x - bases[j]!.x, bases[i]!.z - bases[j]!.z);
+        expect(apart).toBeGreaterThan(CHIP.radius * 2 - 0.002);
+      }
+    }
+  });
+
+  it('lays the same pile out the same way every time', () => {
+    const counts = chipBreakdown(8_400, 100);
+    expect(chipHeap(counts)).toEqual(chipHeap(counts));
+    expect(chipStacks(counts)).toEqual(chipStacks(counts));
   });
 });

@@ -1,8 +1,8 @@
 # Horror Texas Hold'em — Architecture
 
-Status: living document. Phases 1 (poker engine), 2 (online private lobbies) and
-3 (the 3D table) are implemented; everything from Phase 4 on is design intent,
-not code.
+Status: living document. Phases 1 (poker engine), 2 (online private lobbies),
+3 (the 3D table) and 4 (physical interactions) are implemented; everything from
+Phase 5 on is design intent, not code.
 
 ---
 
@@ -66,6 +66,7 @@ engine reads them.
 | `poker/orbit.ts` | First-orbit tracking (button bookkeeping only) |
 | `match/match.ts` | The outer state machine: one lobby, empty room to last player standing |
 | `match/projection.ts` | **The hidden-information boundary.** The only path from state to bytes |
+| `match/presence.ts` | Bodies: gaze, card peeking, hands on chips, stillness |
 | `match/clock.ts` | Time, injected, so every timeout is testable |
 | `net/transport.ts` | The transport seam; `net/socketio-transport.ts` is the only file that names Socket.IO |
 | `net/sessions.ts` | HMAC-signed, room-bound, expiring reconnect tokens |
@@ -80,6 +81,11 @@ engine reads them.
 | `client/scene/cards.ts` | Card meshes, and the client's one privacy decision |
 | `client/scene/chips.ts` | Every chip on the table, in one draw call |
 | `client/scene/seated-camera.ts` | A head on a neck, clamped to what a chair allows |
+| `client/scene/gaze.ts` | Camera direction in, a subject out; and the inverse, for heads |
+| `client/scene/attention.ts` | The soft pull toward what matters, and the right to ignore it |
+| `client/interaction/peek.ts` | The analog lift, as a pure state machine |
+| `client/interaction/card-peek-controller.ts` | The input half of peeking |
+| `client/interaction/presence-reporter.ts` | Reporting your own body to the table |
 | `client/ui/*` | The DOM overlay: lobby, HUD, projected nameplates |
 
 ### Module map (planned)
@@ -87,8 +93,8 @@ engine reads them.
 Server: `SacrificeManager`, `PerkManager`, `StressModel`, `TellDeriver`,
 `HorrorDirector`.
 
-Client: `CardPeekController`, `InteractionManager`, attention bias in the camera,
-`TellVisualizer`, `AudioManager`, `SacrificePresentation`.
+Client: `TellVisualizer`, `AudioManager`, `SacrificePresentation`, composure
+minigames behind `ComposureChallenge`.
 
 None of these are god classes. They communicate through the event stream and
 plain data, not by reaching into each other.
@@ -147,9 +153,15 @@ no gameplay payoff.
   plumbing is free.
 - **Typed events**: `Server<ClientToServerEvents, ServerToClientEvents>` pairs
   cleanly with a `/shared` message module and runtime validation.
-- **Volatile emits** — dropped rather than buffered — which is exactly right for
-  the 15 Hz gaze/tremor channel where a stale packet is worse than no packet.
 - **Acknowledgements with timeouts** for actions that need confirmation.
+
+One thing on that list in Phase 2 has since been struck off. Volatile emits —
+dropped rather than buffered — looked exactly right for the 15 Hz body channel,
+where a stale packet is worse than no packet. In practice they dropped *every*
+packet, silently, with no error anywhere: the entire tell system was inert until
+the server was instrumented to count what actually arrived. The body channel now
+uses an ordinary un-acknowledged `emit`. A channel that fails closed and says
+nothing is a bad trade for a few bytes saved on a stalled connection.
 
 Nothing about the game is latency-bound; the poker layer is turn-based and the
 tell channel is cosmetic and interpolated. Trading a few milliseconds of protocol
@@ -390,6 +402,18 @@ feels tense." Mitigation: build a replay/telemetry harness early (record inputs,
 replay matches, inspect stress curves offline) so balancing is data-driven rather
 than vibes-driven.
 
+*Built in Phase 6* (`server/src/match/stress-telemetry.ts`). A match records the
+stress model's **inputs** — named events with their intensities, and changes in
+each seat's standing pressure — never its cards, and never anybody's name or
+lobby code. The format is an allowlist of number tuples, held by a test. A
+recording replays through any `StressTuning` and lands, under its own tuning,
+on what the players felt to within floating-point rounding. `npm run stress`
+plays simulated evenings (or loads real ones from a server started with
+`STRESS_TELEMETRY_DIR`) and prints them under the shipped tuning beside a
+candidate: time spent calm, shaking, soaked or pinned, how the evening rose
+quarter by quarter, which events did the work and which never fired.
+`stress-profile.test.ts` holds the design's floor over simulated evenings.
+
 **Long-lived server state.** A 90-minute match with reconnects means room state
 must survive disconnects and ideally a server restart. Mitigation: keep
 `TableState` and match state plain-JSON serializable — already true — so
@@ -450,6 +474,15 @@ room.
 **Composure minigame trust.** The server issues the challenge and validates the
 result against server-side timing windows. A client that reports "I succeeded"
 is not evidence.
+
+*Built in Phase 7* (`server/src/match/composure/`). There is no message that
+reports a result: `composure:input` carries a challenge id and `DOWN` or `UP`,
+nothing else, and the server timestamps it on arrival. Every kind judges the
+*intervals* between inputs, so latency cancels rather than being estimated.
+A result changes the stress a seat *shows* — `visibleStress`, applied in
+`projection.ts` on the way to the presence frame — and nothing upstream of
+that, so a composed player's own heart rate is untouched and the stress model
+does not know composure exists.
 
 ---
 
@@ -624,12 +657,18 @@ so "we never draw a face we do not have" is a property rather than a claim.
 ### The performance budget
 
 Measured from the seated camera, which is the one players actually use, with
-`npm run shots`:
+`scripts/scene-budget.mjs` — four players, a hand in progress, the whole frame
+including the shadow pass:
 
-| Players | Draw calls | Triangles |
+| | Draw calls | Triangles |
 |---|---|---|
-| 4 | 131 | 6.5k |
-| 6 | 173 | 8.3k |
+| Phase 7, before the visual overhaul | 161 | 78k |
+| After, `low` tier | 248 | 251k |
+| After, `high` tier (with the lens) | 268 | 253k |
+
+(This table used to read 173 draw calls and 8.3k triangles at six players. That
+was measured in Phase 3, before rounded edges and five-fingered hands, and was
+not updated; the first row above is what the scene actually cost by Phase 7.)
 
 The shape that matters is the slope: **about twenty-one draw calls and a thousand
 triangles per seated player**, from the twenty or so meshes a body needs in order
@@ -648,8 +687,12 @@ Deliberate choices behind those numbers:
   genuinely run away, so it was solved before it became a problem.
 - **Materials are shared from one palette**, so the renderer switches material
   state a handful of times per frame rather than once per object.
-- **One shadow-casting light.** The lamp over the table, at a 1024² map.
-  Everything else is unshadowed fill, and heavy fog does the rest.
+- **One shadow-casting light.** The lamp over the table, at a 2048² map (1024²
+  on the `low` tier). Everything else is unshadowed.
+- **Furniture is welded.** Nothing that does not move is more than one mesh per
+  material: seven chairs were forty-two draw calls and are two.
+- **Two quality tiers**, and a governor that steps a slow machine down once.
+  See `client/src/scene/quality.ts`.
 - **Pixel ratio is capped at 2.** A 3× display would otherwise quadruple the
   pixel cost of a scene whose point is that most of it is dark.
 
@@ -668,3 +711,410 @@ Lighting is a placeholder — one lamp and some fill, enough to be readable. The
 oppressive, dirty, intimate room the brief describes is Phase 5's job, and doing
 it now would mean tuning atmosphere against geometry that is still moving. Faces
 are featureless blocks for the same reason. Nothing animates yet.
+
+---
+
+## 16. Decisions made in Phase 4
+
+**Your cards arrive when you look at them.** This is the phase's one real change
+to the protocol, and everything else follows from it. Hole cards are no longer
+pushed at the deal; `you.holeCards` is null until the player sends `poker:peek`,
+and null again the moment the next hand is dealt.
+
+The reason is that a client handed its cards for free can render them for a whole
+hand without moving, which makes peeking decoration — an animation a modified
+build would simply skip, while its owner sat there with a poker face nobody could
+read because there was nothing to read. Making the look load-bearing costs one
+gesture a hand and buys the thing the brief is actually about: **every player
+must physically lift their cards at least once, in front of everybody, and every
+look after that is a decision somebody might be watching.**
+
+It is also, incidentally, the strongest anti-cheat measure in the project. A
+client that never peeks never receives the cards.
+
+The reply to `poker:peek` is *not* the cards. It marks the seat as having looked,
+which causes a normal view push, and the cards arrive inside the view like every
+other byte of match state. Answering in the ack would have created a second path
+from state to bytes, and then §5's single-boundary guarantee would be two
+guarantees, and then none.
+
+**Presence is a second channel, not a bigger view.** Bodies change fifteen times
+a second and poker does not. Sending a full `ClientView` per body update would be
+six players' worth of chips, cards and legal actions at 15 Hz for a game in which
+nothing had happened — roughly 150 KB/s per room to say that somebody turned
+their head.
+
+So there are two exits from the server, both in `projection.ts`:
+
+```
+projectForViewer(match, viewerId, now) -> ClientView      per viewer, on change
+presenceFrame(match, now)              -> PresenceFrame   identical for all, on a tick
+```
+
+The second takes **no viewer argument**, and that is the point rather than an
+optimization. Everything in a presence frame is something a person sitting at
+this table could see with their own eyes, so there is no hidden half to project.
+The type says so, a structural test walks the frame and fails on any field that
+is not a body fact, and the integration suite does the same over a live match.
+If a viewer parameter ever appears there, it should be argued for loudly.
+
+**Gaze is a subject, not a vector.** A client reports "I am looking at seat 4",
+not a quaternion. Six players' head angles at 15 Hz would let a script measure
+micro-movements no human eye could resolve, turning tell-reading into a
+programming exercise; quantising to named points of interest bounds the signal to
+roughly what a person could actually perceive. It is also one byte instead of
+twelve, but that is not why.
+
+A client can of course *lie* about where it is looking — as can a person, with
+their eyes. That is a poker skill, not an exploit, and it is the one place in
+this codebase where an unverifiable client claim is correct by design.
+
+**Silence is not privacy.** The tempting bug in a change-gated reporter is to go
+quiet when nothing is happening. But a client that says nothing is
+indistinguishable from one that crashed, and "perfectly still" is exactly the
+state a nervous player would most like to fake. So the reporter heartbeats
+whether or not anything changed, and the server replicates a quiet seat as
+**still** — with a `stillMs` counter that the brief's tell list explicitly asks
+for. A player who stops reporting does not vanish; their cards fall to the felt
+and the table watches them not move.
+
+**The rates are a system, and one relationship is load-bearing.** `graceMs` must
+comfortably exceed `heartbeatMs`. It did not, at first — decay started 140ms after
+the last report while heartbeats were 500ms apart, so every card held steady at
+the table sagged to a fifth of its height and sprang back twice a second. The
+constants now carry the invariant in a comment and a test asserts the margin,
+because the symptom looked like an animation bug and the cause was two numbers in
+different files.
+
+**Pointer lock is offered, never imposed.** Phase 3 deferred it because it fights
+a DOM action bar. The resolution is that clicking the table takes the pointer,
+Escape gives it back, drag-look still works unlocked — and every button on the
+action bar has a key, so a locked player never has to surrender the room in order
+to call. A poker game where looking around and playing poker are mutually
+exclusive is a strange poker game.
+
+**Peeking does not require aiming at anything.** Hold the right button or `V` and
+draw the pointer toward yourself. Aiming a crosshair at a playing card in a dark
+room would make the most-used interaction in the game the most annoying one, and
+these are *your* cards, in front of you — you know where they are. What still
+governs whether you can *read* them is where you are looking, because the card
+tilts toward its owner's eyes; and looking down at your own hand is itself
+replicated, which is the tell the brief describes.
+
+Lifting and looking are the same physical input, so the peek takes the pointer
+while it is held and the camera stays put.
+
+**The card pivots on its near edge and raises its far one**, which is how a
+person props a card against the felt to read it. The face turns toward its owner
+and away from everyone else — though it would not matter if it did not, because
+an opponent's client has no face to turn. The geometry is a pure function with
+its own tests, so "which way does a lifted card point?" is a property rather than
+something that looked about right in a screenshot.
+
+Seats on a ring of seven are only about 51° apart, so a neighbour always has a
+partial view of a tilted card. That is true of a real table too, and it is why
+the guarantee lives in `visibleFaces` rather than in the geometry.
+
+**Attention is a nudge with an off switch.** When somebody else's turn begins, or
+a raise lands, or the Dealer does something, the player's head drifts toward it.
+The bias moves their *look target* rather than the camera, closes at most 62% of
+the angle, turns no faster than a neck could — and the instant they move the
+mouse it lets go completely and stays gone for 2.4 seconds. Watching the wrong
+person on purpose is a real move in this game; a camera that dragged them back
+would destroy it. The negative tests are the important ones.
+
+**Peeks are not narrated.** They do not appear in the event log, and no counter
+is replicated. A permanent record saying "seat 3 checked their cards" would be
+better information than anyone at a real table has ever had. Observation here is
+live, fallible, and easy to miss — which is the entire point of "did they
+notice?". The server *does* count peeks and time spent peeking, privately, for
+Phase 6's stress model; nobody is ever told.
+
+**The HUD's card readout is gone.** Phase 3 printed the player's hand in the
+corner because a card lying flat on a dark table was guesswork. Keeping it would
+have made every peek pointless.
+
+### What Phase 4 knowingly leaves undone
+
+Chip interaction is presentational, not tactile: bets still go through the action
+bar (now with keys and wheel sizing), and what the table learns is that your
+hands are on your chips — never for how much. A push-the-stack-forward gesture
+was scoped out as machinery duplicating a button.
+
+Avatars turn their heads and lean over their cards. They do not yet breathe,
+tremble or sweat: those carry *information*, which means they belong to Phase 6's
+stress model rather than to an idle animation invented here.
+
+The `unsteadiness` input on the peek gesture exists and does nothing. Phase 6
+feeds tremor into it, so that holding a card still enough to read is harder when
+your hands are shaking. It will change no odds when it does — a shaking player
+sees the same card, they just work harder to see it, in front of everybody.
+
+### Debugging a channel you cannot see
+
+Two of this phase's three real bugs were invisible from the outside: the replicated
+peek looked like a rendering problem and was a networking one, and the sagging
+card looked like an animation problem and was two constants in different files.
+The room is dark, and a player's own shoulders block their own cards, so
+screenshots are a poor instrument here.
+
+`window.__bodies()` (development builds only) reports what a client believes every
+seat's body is doing, including how old its last presence frame is. It is the only
+honest way to ask "did the table actually see that?", and `npm run shots` prints
+it alongside the screenshots.
+
+
+---
+
+## 17. What playtesting changed
+
+Four notes came back from the first real session at the table. Two were polish;
+two were things that were simply wrong, and one of those was wrong in a way the
+whole phase depended on.
+
+**Hole cards were face up.** The face was printed on the top surface and legibility
+came from tilt, which meant a player could read their hand without touching it —
+so peeking was an animation with nothing behind it, and the mechanic the phase was
+built around did not exist. Hole cards are now dealt **face down**, with the face
+on the underside and the top always a back. Board cards are the opposite, because
+the Dealer turns those over for everybody.
+
+**The peek is a bend, not a tilt.** The old pose rotated a rigid card up off the
+felt, which is the wrong physical claim: it says the card left the table, and a
+careful player never lets that happen. The card is now subdivided along its length
+and genuinely curls — the far edge stays pinned, the near corner comes up, and one
+corner leads so the fold runs diagonally under a fingertip. `peel.ts` is the maths
+and has its own tests; the properties that matter (the far edge never lifts, the
+near edge passes vertical, the fold is a curve and not a crease) are asserted
+rather than eyeballed.
+
+Two things had to change to make the result *readable*. The underside of a curled
+card faces away from the room's only lamp, so it rendered as a black wedge: the
+card material now carries an emissive map of the atlas itself, so pale card stock
+lifts out of the dark and the near-black back barely moves — which does the board
+a favour too. And the faces are now **four-index**, with a rank in every corner
+rather than the usual two. Four-index decks exist for exactly this situation: with
+two, half the time the index is on the part still lying flat and you have bent your
+card in front of the whole table to learn nothing.
+
+**Heads cranked back and forth.** Gaze is replicated as a subject rather than an
+angle, so sweeping your eyes across the table arrived at everybody else as
+`seat 3 → away → seat 4 → board → seat 5`, and each snap yanked an avatar's head
+somewhere new. Fixed at the source, not in the animation: a target must be held
+for 220ms before it is reported, so passing your eyes over somebody on the way to
+somebody else is not looking at them. `AWAY` now *holds* the head where it is
+instead of swinging it to a canned resting pose, which was most of the movement.
+Necks are also slower and speed-limited. This makes the signal better as well as
+smoother — a head that snaps at everything carries no information.
+
+**Zoom is a lean.** The board was hard to read from a seat. A camera zoom would
+have been simpler and wrong: it would let somebody study an opponent's hands from
+across the room at no cost, in a game whose premise is that looking is something
+others can see you do. So the wheel leans you in — the head moves along the line
+of sight and the field of view narrows — and `lean` is replicated like everything
+else, so craning over the felt is a tell. It follows the *whole* look, pitch
+included, so leaning while looking down at your own hand goes down toward it
+rather than out over the table.
+
+**The log draws cards.** `flop: 9h 6d Kh` is a thing you decode. Three small cards
+is a thing you glance at, and glancing is what a log at the edge of the screen is
+for. `describeEvent` returns pieces rather than a string, and cards among them are
+rendered as chips.
+
+### Three bugs the notes flushed out
+
+None of them were the thing being reported, and all three were invisible in a
+screenshot until something else was fixed first.
+
+**Changing seats stopped moving the camera.** The lean rewrite routed the camera's
+position through `#applyLean`, which skips its work when the posture has not
+changed — correct every frame, catastrophic the one time the *seat* changed
+instead. Players sat in the Dealer's chair looking out along their own seat's
+heading. It is now a test: sitting at a seat puts the camera at that seat.
+
+**The attention bias was a camera lock.** It moved a fraction of the *remaining*
+angle every frame, which converges: over a second the "gentle nudge" arrived fully
+on whoever had acted. `maxClose` capped the per-frame rate and not the total, and
+the test that was supposed to catch this ran for 1.3 seconds and asserted only
+that the head had not passed the target. A pull is now bounded by total
+displacement, measured from where the head actually was, and re-focusing the same
+subject extends the moment rather than re-measuring from the new position. The
+tests run ten seconds, at two frame rates, and would fail loudly.
+
+**Your head wandered while you were peeking.** The gesture takes the pointer, and
+`look()` returned before ever telling the attention system that the player was
+doing something deliberate — so the game pulled your head toward the acting player
+while you were bent over your own cards, and you could not fight it, because the
+gesture had taken the pointer you would have fought it with. Peeking now counts as
+deliberate input, and nothing pulls at a player who is busy with their own hands.
+
+
+### The second round of notes
+
+Two of the first round's fixes were not enough, and the screenshots said why.
+
+**The bias was still walking the view off the table, in pitch.** Bounding each
+pull by total displacement fixed one pull; it did nothing about four. Every
+subject worth looking at — a face, the Dealer's hood — sits at roughly the same
+height, so every pull pushed pitch the *same way*, and four players acting in
+turn is four pushes: -0.42 rad, then -0.16, then -0.06, then level. The player
+ends up sitting at a poker table staring at everybody's chest, which is what
+"the head cranked back" looked like from the inside.
+
+Yaw never had this problem, because the seats are in different directions and
+the pulls cancel. So the bias is **yaw only** now. Turning to look at somebody is
+a yaw movement anyway — you do not raise your chin to see across a table you are
+already looking down at.
+
+**The resting camera aimed at the middle of the table**, which put a player's own
+two cards at the very bottom edge of the frame. Every hand began by dragging the
+view down a hundred pixels to find your own hand, and a player who did not know
+to do that experienced the peel as "I curled it as far as it goes and still could
+not see anything" — which is exactly the report. The rest now aims most of the
+way toward your own cards. The board stays comfortably in view; opponents' faces
+become a deliberate look up, which is the right way round, because raising your
+eyes to somebody is the thing worth noticing.
+
+With that fixed the peel needed to work harder rather than differently:
+`PEEL_SPAN` 0.62 → 0.78 so most of the card curls rather than a triangle of it,
+`maxLift` 2.0 → 2.5 rad so the underside turns properly up into the light instead
+of arriving nearly edge-on, `travelPixels` 190 → 150 because the old pull asked
+for most of a mouse mat, and a corner index half again as large.
+
+**Lifting a card now brings your head down to it.** Nobody peels a card and then
+reads it from where they were sitting. It reuses the lean, with one difference
+that matters: it moves the head without narrowing the field of view. A tighter
+frustum while somebody bends over their own cards crops those cards off the
+bottom of the screen, which is the opposite of the point — the first attempt did
+exactly that. Zoom stays for the thing you deliberately chose to squint at.
+
+The peek-lean is also not reported as a lean. The table already learns about the
+peek; replicating the head movement it causes would show everybody somebody
+hunching over nothing.
+
+
+### The third round: heads leaving bodies
+
+"The heads are still broken" was not the gaze system at all. It was a transform
+mistake in the avatar, and it had been there since Phase 4 added head tracking.
+
+A head group's origin *is* its pivot. This one sat at the avatar's feet, with the
+neck and skull positioned a metre and a fifth up inside it — so rotating it swung
+the head through a metre-wide arc around the floor rather than turning it on its
+neck. At a full turn the head left the body entirely and sailed off across the
+room, which is what those brown slabs floating beside the players were.
+
+The pivot is at the neck now and the children are placed relative to it. There is
+a test that turns every avatar toward every subject at the table and asserts the
+skull never travels more than a few centimetres: a head swivels, it does not
+move. Reverting the fix makes it fail at 0.60m, so it would have caught this.
+
+Head yaw is also clamped tighter than the camera's — 72° against the camera's
+100°. A player may swivel their view most of the way behind them because a real
+person turns their whole upper body to do it; a rigid avatar that does the same
+with its neck alone looks like a broken toy.
+
+Alongside it, the peel went further again: `maxLift` 2.5 → 2.9 radians, which
+folds the corner right back over itself rather than merely standing it up, and
+bending over a card now reaches nearly twice as far as leaning at the board
+(`LEAN.peekReach`), because half of making a corner index legible across a dark
+table is simply being nearer to it. Two tests had to change rather than be made
+to pass: past about 2.3 radians a curling tip starts coming *down* as it rolls
+over, so height is monotonic only up to there, and the peek and the lean are now
+measured in metres rather than compared as fractions.
+
+
+### Real cards, and picking them up
+
+**The faces are proper playing cards now.** The four-index version solved a real
+problem — a peeked corner was readable whichever one you curled — and it looked
+wrong, which people notice instantly, because they have been reading these
+arrangements since they were children. So: two indices, top-left and bottom-right
+rotated, and the standard pip layouts. Six is two columns of three; seven is six
+with one more between the top pair; eight is seven with its mirror below; the
+bottom half is printed upside down.
+
+`card-pips.ts` holds the layouts as fractions of the card, with tests that check
+each rank has the right number of pips, in columns, with the lower half inverted.
+One test had to be written around the seven, which is genuinely asymmetric: its
+odd pip sits above the middle with nothing below to match. That is what a real
+seven looks like, and "fixing" it would make the card wrong.
+
+Court cards are a monogram rather than an attempt at the engraved figures. A
+procedurally drawn king is a bad king, and at the size a card appears across this
+table the letter is what anybody reads.
+
+**Pulling past a full curl picks the cards up off the table.** The peek gesture
+now has two stages with a short dead zone between them: curl the corner, and then
+— if you keep pulling — the pair comes off the felt entirely and up in front of
+your face, where you can simply look at them.
+
+The dead zone matters. Without it, overshooting a peek would announce to the
+whole room that you were picking your hand up, and that is not a thing to do by
+accident. `HAND_LIFT.breakPixels` is the width of that decision.
+
+This is the loudest thing a player can do at this table, and deliberately so. At
+a real game, lifting your hole cards off the cloth is the move everybody notices
+and most rooms discourage. Here it is available, it works, and it is replicated
+as its own presence field — not folded into `peek`, because they are different
+acts and the table reads them differently. Certainty about your own hand, bought
+with the most conspicuous gesture in the game.
+
+Two details that took a moment to get right. The lean *backs off* as the cards
+rise, because bending toward the felt and holding cards up to your face are
+opposite movements. And the card transform is set absolutely rather than
+accumulated: `updatePoses` runs every frame, and a rotation that adds to itself
+sixty times a second is a card in orbit.
+
+Falling is ordered: a released hand comes down to the felt first and flattens
+onto it second, in the reverse of the order it went up.
+
+
+### Hands that do the work
+
+The cards moved on their own. They curled, they came off the table, they hung in
+the air in front of a player whose hands were still lying flat on the felt — a
+séance rather than a card game.
+
+Three pieces fixed it.
+
+**`ik.ts` — a two-bone solver.** The arms were built once from three fixed points
+and never moved again, which is fine while hands only rest on a table and useless
+the moment one has to arrive somewhere. Given a shoulder and a wrist target, the
+elbow is where two spheres meet; the closed form is faster than iterating and
+completely predictable. A `pole` picks which point on that circle, which is what
+stops elbows inverting through torsos and what stops an arm choosing a different
+answer sixty times a second. Out-of-reach targets pull the wrist back onto the
+edge of the arm's span, because an arm that stretches looks far worse than one
+that falls short.
+
+**`hold.ts` — one set of numbers, used twice.** The card renderer puts the cards
+somewhere and the avatar puts its hand somewhere, and if those two disagree by a
+centimetre the cards float. So neither of them owns the answer: both read the
+same pure functions, and the tests check that a fingertip lands on the corner the
+fold is running from.
+
+**Fingers that pivot at the knuckle.** They were bare meshes centred on their own
+middles, so rotating one bent a finger in half around a point an inch out in the
+air. Each is a hinge at the knuckle now with the bone hanging off in front —
+exactly the lesson the head taught, one joint further out. `removeFinger` still
+works, because hiding a knuckle takes its finger with it.
+
+The right hand does the peeling, and it is the right hand for a reason: a person
+facing the middle of the table has the table's clockwise direction on their
+right, which is the side the fold's leading corner is on. The off hand comes up
+to shield a raised pair and stays out of it otherwise, because a hand hovering
+over cards lying flat on the felt looks like a threat.
+
+**Which way the wrist sits behind the fingers depends on what the hand is doing**,
+and getting it wrong was very visible. A hand flat on the felt has its wrist
+nearer the player than its fingers. A hand holding cards *up* has its wrist
+underneath them — you read your hand over the top of your own fingers, not
+through your own forearm. The first version used the flat-hand offset for both
+and filled the screen with the player's own arms, hiding the very thing they had
+just picked up. The cards are also held a little lower and less far back than
+they were, for the same reason.
+
+The local player's hands are driven straight from their own input rather than
+from the presence echo. Everything else about a body is fine arriving 80ms late;
+watching your own arm lag your own mouse is the one case where latency is unfair.

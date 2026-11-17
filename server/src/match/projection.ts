@@ -3,26 +3,52 @@ import {
   levelAt,
   type Card,
   type ClientView,
+  type HandPhase,
   type HandView,
   type LevelView,
   type PlayerView,
+  type PresenceFrame,
   type SeatView,
+  type SelfFrame,
   type SelfView,
 } from '@cursed/shared';
+import { COMPOSED, NO_COMPOSURE, dreadLevel, tellsFor } from '@cursed/shared';
 import { legalActions } from '../poker/index.js';
+import { projectDealer } from './dealer.js';
 import { elapsedMs, findPlayer, type MatchState, type PlayerRecord } from './match-state.js';
+import { hasPeeked, projectPresence } from './presence.js';
+import { projectSelfStress, stressOf } from './stress.js';
+import { composureView, isComposing, visibleStress } from './composure/index.js';
 
 /**
  * The hidden-information boundary.
  *
- * THIS IS THE ONLY FUNCTION IN THE SERVER THAT MAY TURN MATCH STATE INTO
+ * THIS IS THE ONLY MODULE IN THE SERVER THAT MAY TURN MATCH STATE INTO
  * SOMETHING A CLIENT RECEIVES. If a second one ever appears, the guarantee this
  * project rests on becomes two guarantees, and then none.
  *
- * The rules it enforces:
+ * There are three exits, because the protocol carries three kinds of information:
+ *
+ *   - `projectForViewer` — the situation, per viewer, on every change.
+ *   - `presenceFrame` — bodies, identical for everybody, on a fixed tick.
+ *   - `selfFrame` — your own heart, to you alone, on a slower tick.
+ *
+ * The third arrived in Phase 6 and was argued for rather than slipped in: stress
+ * decays between events, and the view only moves when the match does, so a
+ * heart carried only on the view would freeze between bets. It is the exact
+ * mirror of `presenceFrame` — that one has no hidden half and goes to everybody;
+ * this one is *all* hidden half and goes to one person.
+ *
+ * The second one is a broadcast precisely *because* it has no viewer-specific
+ * half. Everything in a presence frame is something a person sitting at this
+ * table could see with their own eyes, which is a property the tests check by
+ * walking the frame rather than by trusting this paragraph.
+ *
+ * The rules `projectForViewer` enforces:
  *
  *   1. The deck never leaves the process, in any form, ever.
- *   2. A viewer sees their own hole cards and nobody else's.
+ *   2. A viewer sees their own hole cards, and only after they have looked at
+ *      them — see `SelfView.holeCards` for why the look is load-bearing.
  *   3. Another player's cards appear only in a showdown reveal — cards poker
  *      itself has already made public.
  *   4. Nothing about a player's stack, position or history is hidden; poker is
@@ -45,10 +71,85 @@ export function projectForViewer(match: MatchState, viewerId: string | null, now
     level: projectLevel(match, now),
     players: match.players.map(projectPlayer(match.hostPlayerId)),
     hand: projectHand(match),
-    you: projectSelf(match, viewer),
+    you: projectSelf(match, viewer, now),
     lastResult: match.lastResult,
     winnerPlayerId: match.winnerPlayerId,
   };
+}
+
+/**
+ * The table's bodies, as everyone sees them.
+ *
+ * No viewer argument, deliberately: presence has no hidden half, and the type
+ * system says so. Adding one would be the first step toward a second hidden-
+ * information boundary, so it should be argued for loudly if it ever happens.
+ */
+export function presenceFrame(match: MatchState, now: number): PresenceFrame {
+  const seatIndices = (match.table?.seats ?? [])
+    .filter((seat) => seat.seated)
+    .map((seat) => seat.seatIndex);
+
+  const connected = new Set(
+    match.players
+      .filter((player) => player.connected && player.eliminatedAt === null)
+      .map((player) => player.seatIndex),
+  );
+
+  return {
+    ...projectPresence(
+      match.presence,
+      {
+        seatIndices,
+        connected,
+        // Supplied rather than computed in `presence.ts`: that module lays out
+        // bodies and has no business knowing how frightened anybody is.
+        //
+        // What the table sees is the stress a seat *shows*: their real stress,
+        // passed through whatever composure has done to it. Their own heart,
+        // on `selfFrame`, is never passed through anything.
+        tellsFor: (seatIndex) =>
+          tellsFor(visibleStress(match.composure, seatIndex, stressOf(match.stress, seatIndex, now), now)),
+        // That they are steadying themselves is public; everything about how
+        // is not. One bit — see `SeatPresence.composing`.
+        composingFor: (seatIndex) => isComposing(match.composure, seatIndex),
+      },
+      now,
+    ),
+    dealer: projectDealer(match.dealer, now),
+    dread: roomDread(match, now),
+  };
+}
+
+/**
+ * One player's own body, for that player only.
+ *
+ * Takes a viewer, like `projectForViewer`, and for the same reason: what it
+ * carries belongs to exactly one person. `game-server.ts` sends each connection
+ * the frame for its own player and no other, and `tests/integration.test.ts`
+ * checks that nobody ever receives somebody else's.
+ */
+export function selfFrame(match: MatchState, viewerId: string, now: number): SelfFrame {
+  const viewer = findPlayer(match, viewerId);
+  return {
+    serverTime: now,
+    stress: projectSelfStress(match.stress, viewer?.seatIndex ?? null, now),
+  };
+}
+
+/**
+ * How bad the room has got.
+ *
+ * Every term is a public fact — the clock, the empty chairs, what people have
+ * given up — so this is safe to hand to everybody, and it has to be, or the
+ * lighting in one player's room would not match the lighting in another's.
+ */
+export function roomDread(match: MatchState, now: number): number {
+  return dreadLevel({
+    startingPlayers: match.startingPlayers,
+    eliminated: match.players.filter((player) => player.eliminatedAt !== null).length,
+    elapsedMs: elapsedMs(match, now),
+    sacrifices: match.sacrifices,
+  });
 }
 
 function projectPlayer(hostPlayerId: string) {
@@ -99,6 +200,17 @@ function projectHand(match: MatchState): HandView | null {
   // showdown produces none, and a live hand produces none either.
   const reveals = new Map((hand.result?.showdown ?? []).map((r) => [r.seatIndex, r]));
 
+  // An all-in hand being run out. The engine finished it in one step — the
+  // whole board and the result are sitting in `hand` — and the table is being
+  // told a street at a time. Until the last card is down, this is the table as
+  // it *stands*: the board so far, the hands face up because nobody can bet,
+  // the stacks before anybody is paid, and nothing about what any hand makes.
+  //
+  // Every one of those is something this function could leak the ending
+  // through, which is why holding it back happens here, at the boundary, and
+  // not in a client's animation.
+  const runout = match.runout;
+
   const seats: SeatView[] = match.table.seats
     .filter((tableSeat) => tableSeat.seated)
     .map((tableSeat): SeatView => {
@@ -110,43 +222,69 @@ function projectHand(match: MatchState): HandView | null {
         seatIndex: tableSeat.seatIndex,
         playerId: tableSeat.playerId,
         displayName: player?.displayName ?? tableSeat.playerId,
-        stack: handSeat?.stack ?? tableSeat.stack,
+        // What they sat down with, less what they put in: their stack before
+        // the pot is paid. Afterwards it is simply their stack.
+        stack: handSeat
+          ? runout
+            ? handSeat.stackAtStart - handSeat.totalCommitted
+            : handSeat.stack
+          : tableSeat.stack,
         betThisRound: handSeat?.betThisRound ?? 0,
         folded: handSeat?.folded ?? false,
         allIn: handSeat?.allIn ?? false,
         inHand: handSeat !== undefined,
         connected: player?.connected ?? false,
         revealedCards: reveal ? [...reveal.holeCards] : null,
-        handCategory: reveal?.category ?? null,
-        bestFive: reveal ? [...reveal.bestFive] : null,
+        // Ranked against the whole board, so naming the hand names the river.
+        handCategory: runout ? null : (reveal?.category ?? null),
+        bestFive: reveal && !runout ? [...reveal.bestFive] : null,
       };
     });
 
   return {
     handNumber: hand.handNumber,
-    phase: hand.phase,
+    phase: runout ? streetOf(runout.boardShown) : hand.phase,
     buttonSeat: hand.buttonSeat,
     smallBlindSeat: hand.smallBlindSeat,
     bigBlindSeat: hand.bigBlindSeat,
-    board: [...hand.board],
+    board: runout ? hand.board.slice(0, runout.boardShown) : [...hand.board],
     currentBet: hand.currentBet,
     potTotal: hand.seats.reduce((sum, s) => sum + s.totalCommitted, 0),
     actingSeat: hand.actingSeat,
     actionDeadline: hand.actingSeat === null ? null : match.actionDeadline,
+    allInRunout: runout !== null,
     seats,
   };
 }
 
-function projectSelf(match: MatchState, viewer: PlayerRecord | undefined): SelfView {
+/** The street a board of this many cards is on. */
+function streetOf(boardCards: number): HandPhase {
+  return boardCards >= 5 ? 'RIVER' : boardCards === 4 ? 'TURN' : boardCards >= 3 ? 'FLOP' : 'PREFLOP';
+}
+
+function projectSelf(match: MatchState, viewer: PlayerRecord | undefined, now: number): SelfView {
   if (!viewer) {
-    return { playerId: '', seatIndex: null, holeCards: null, legalActions: null };
+    return {
+      playerId: '',
+      seatIndex: null,
+      holeCards: null,
+      hasPeeked: false,
+      legalActions: null,
+      stress: COMPOSED,
+      composure: NO_COMPOSURE,
+    };
   }
 
   const hand = match.table?.hand;
   const seat = hand?.seats.find((s) => s.seatIndex === viewer.seatIndex);
 
+  // Cards reach their owner only once they have lifted them. Until then the
+  // client has nothing to render and nothing to leak, which is the point: a
+  // modified client cannot skip a gesture it never received the cards without.
+  const looked = hasPeeked(match.presence, viewer.seatIndex, hand?.handNumber ?? null);
+
   // The viewer's own cards, and only ever from their own seat.
-  const holeCards: Card[] | null = seat?.holeCards ? [...seat.holeCards] : null;
+  const holeCards: Card[] | null = looked && seat?.holeCards ? [...seat.holeCards] : null;
 
   const isTheirTurn = hand !== undefined && hand !== null && hand.actingSeat === viewer.seatIndex;
 
@@ -154,6 +292,12 @@ function projectSelf(match: MatchState, viewer: PlayerRecord | undefined): SelfV
     playerId: viewer.playerId,
     seatIndex: viewer.seatIndex,
     holeCards,
+    hasPeeked: looked,
     legalActions: isTheirTurn && hand ? legalActions(hand, viewer.seatIndex) : null,
+    // Your own heart, and nobody else's. The table gets `tells` on the presence
+    // frame instead — shaking and breathing, quantised, which is what somebody
+    // across a dark table actually has to work with.
+    stress: projectSelfStress(match.stress, viewer.seatIndex, now),
+    composure: composureView(match.composure, viewer.seatIndex, now),
   };
 }

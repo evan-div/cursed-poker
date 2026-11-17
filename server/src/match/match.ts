@@ -2,6 +2,7 @@ import {
   DEFAULT_BLIND_STRUCTURE,
   MAX_PLAYERS,
   MIN_PLAYERS,
+  PRESENCE,
   SEAT_COUNT,
   levelAt,
   levelIndexForElapsed,
@@ -10,6 +11,9 @@ import {
   type ErrorCode,
   type MatchEvent,
   type PlayerAction,
+  type PresenceFrame,
+  type PresenceInput,
+  type SelfFrame,
 } from '@cursed/shared';
 import {
   CryptoRandomSource,
@@ -24,6 +28,31 @@ import {
   type RandomSource,
 } from '../poker/index.js';
 import { SystemClock, type Clock, type TimerHandle } from './clock.js';
+import { createDealer, updateDealer, type DealerContext } from './dealer.js';
+import {
+  applyStressEvent,
+  createStress,
+  forgetStress,
+  settleStress,
+  type StandingPressure,
+  stressOf,
+  TRIGGERS,
+  stareIntensity,
+  type StressTuning,
+} from './stress.js';
+import type { StressObserver } from './stress-telemetry.js';
+import {
+  DEFAULT_COMPOSURE_KINDS,
+  beginComposure,
+  canBegin,
+  composureInput,
+  createComposure,
+  expireComposure,
+  forgetComposure,
+  type ComposureChallenge,
+} from './composure/index.js';
+import type { ComposureInput } from '@cursed/shared';
+import type { StressEvent } from '@cursed/shared';
 import {
   elapsedMs,
   findPlayer,
@@ -32,7 +61,15 @@ import {
   type MatchState,
   type PlayerRecord,
 } from './match-state.js';
-import { projectForViewer } from './projection.js';
+import {
+  createPresence,
+  forgetSeat,
+  markPeeked,
+  reportPresence,
+  resetForHand,
+} from './presence.js';
+import { presenceFrame, projectForViewer, roomDread, selfFrame } from './projection.js';
+import { splitRunout } from './runout.js';
 
 /**
  * The outer state machine: one lobby, from empty room to last player standing.
@@ -68,6 +105,14 @@ export interface MatchTimings {
   foldedHandDisplayMs: number;
   /** Breath between settling one hand and dealing the next. */
   betweenHandsMs: number;
+  /**
+   * An all-in runout: how long the hands lie face up before the first card
+   * comes, how long each street is left to be looked at before the next, and
+   * the beat after the last one before anybody is told who won. See `runout.ts`.
+   */
+  runoutRevealMs: number;
+  runoutStreetMs: number;
+  runoutSettleMs: number;
 }
 
 export const DEFAULT_TIMINGS: MatchTimings = {
@@ -76,6 +121,9 @@ export const DEFAULT_TIMINGS: MatchTimings = {
   showdownDisplayMs: 4_000,
   foldedHandDisplayMs: 1_500,
   betweenHandsMs: 1_500,
+  runoutRevealMs: 2_200,
+  runoutStreetMs: 2_600,
+  runoutSettleMs: 1_600,
 };
 
 export interface MatchOptions {
@@ -85,16 +133,81 @@ export interface MatchOptions {
   seatCount?: number;
   clock?: Clock;
   rng?: RandomSource;
+  /** The Dealer's source of chance. Never the deck's — see `Match#dealerRng`. */
+  dealerRng?: RandomSource;
   timings?: Partial<MatchTimings>;
+  /**
+   * Composure's source of chance: which challenge, and its rhythm. Separate
+   * from the deck's and the Dealer's, for the same reason they are separate
+   * from each other.
+   */
+  composureRng?: RandomSource;
+  /** The challenges a player may be given. Defaults to the shipped two. */
+  composureKinds?: readonly ComposureChallenge[];
+  /** The stress model's numbers. Defaults to the shipped tuning. */
+  stressTuning?: Partial<StressTuning>;
+  /**
+   * Somebody listening to the stress model's inputs — see
+   * `stress-telemetry.ts`. Hears only what the model itself reads, which is
+   * only what is public.
+   */
+  telemetry?: StressObserver;
 }
 
-export type MatchListener = (events: MatchEvent[]) => void;
+/**
+ * The events that are him physically doing something.
+ *
+ * Cards leaving his hands, a board turned over, the pot pushed to somebody. Not
+ * a player betting — that is a player's hands, and he watches it.
+ */
+const MOVED_BY_HIS_HANDS = new Set<MatchEvent['type']>([
+  'HOLE_CARDS_DEALT',
+  'STREET_DEALT',
+  'POT_AWARDED',
+]);
+
+/** How many cards a runout act puts on the board. */
+function streetCards(act: readonly MatchEvent[]): number {
+  const dealt = act.find((event) => event.type === 'STREET_DEALT');
+  return dealt && dealt.type === 'STREET_DEALT' ? dealt.cards.length : 0;
+}
+
+/**
+ * Hears about every change. `only`, when set, means the change concerns that
+ * one player and nobody else may be told anything happened — not even by an
+ * empty update arriving at a telling moment.
+ */
+export type MatchListener = (events: MatchEvent[], only?: string) => void;
 
 export class Match {
   readonly state: MatchState;
   readonly #clock: Clock;
   readonly #rng: RandomSource;
+  /**
+   * The Dealer's own source of chance, and emphatically not the deck's.
+   *
+   * If he drew from `#rng`, the shuffle would depend on how often he had
+   * twitched — the supernatural layer reaching the cards through a side door,
+   * which is the one thing this whole project is arranged to prevent. Two
+   * sources, always, and `match.test.ts` asserts the deck is unmoved by an hour
+   * of him fidgeting.
+   */
+  readonly #dealerRng: RandomSource;
   readonly #timings: MatchTimings;
+  /** Who is recording the stress model's inputs. A new evening gets a new one. */
+  #telemetry: StressObserver | null;
+  readonly #stressTuning: Partial<StressTuning> | undefined;
+  readonly #composureRng: RandomSource;
+  readonly #composureKinds: readonly ComposureChallenge[];
+  /** How long the current decision's clock was armed for, for `CLOCK_LOW`. */
+  #armedMs = 0;
+  /** The deadline `CLOCK_LOW` last fired for, so it fires once per decision. */
+  #clockLowFor: number | null = null;
+  /** Who the Dealer was looking at on the last tick, for `WATCHED`. */
+  #watchedSeat: number | null = null;
+  /** When each seat last felt a counted re-check, and a stare, for cooldowns. */
+  #lastRecheck = new Map<number, number>();
+  #lastWatched = new Map<number, number>();
   readonly #listeners = new Set<MatchListener>();
 
   #timer: TimerHandle | null = null;
@@ -104,7 +217,12 @@ export class Match {
   constructor(options: MatchOptions) {
     this.#clock = options.clock ?? new SystemClock();
     this.#rng = options.rng ?? new CryptoRandomSource();
+    this.#dealerRng = options.dealerRng ?? new CryptoRandomSource();
     this.#timings = { ...DEFAULT_TIMINGS, ...options.timings };
+    this.#telemetry = options.telemetry ?? null;
+    this.#stressTuning = options.stressTuning;
+    this.#composureRng = options.composureRng ?? new CryptoRandomSource();
+    this.#composureKinds = options.composureKinds ?? DEFAULT_COMPOSURE_KINDS;
 
     this.state = {
       roomCode: options.roomCode,
@@ -115,9 +233,16 @@ export class Match {
       players: [],
       structure: options.structure ?? DEFAULT_BLIND_STRUCTURE,
       table: null,
+      presence: createPresence(),
+      stress: createStress(options.stressTuning),
+      dealer: createDealer(this.#clock.now()),
+      composure: createComposure(),
+      startingPlayers: 0,
+      sacrifices: 0,
       clockElapsedMs: 0,
       clockRunningSince: null,
       actionDeadline: null,
+      runout: null,
       lastResult: null,
       winnerPlayerId: null,
     };
@@ -134,6 +259,171 @@ export class Match {
 
   viewFor(playerId: string | null): ClientView {
     return projectForViewer(this.state, playerId, this.#clock.now());
+  }
+
+  /**
+   * Moves the bodies on. Called on the presence tick, before it broadcasts.
+   *
+   * Separate from `presenceFor` on purpose: a projection that mutates is a
+   * projection nobody can call twice, and this one is called from a loop over
+   * every room in the process. This is where the Dealer thinks.
+   */
+  tick(): void {
+    if (this.#disposed) return;
+    const now = this.#clock.now();
+    updateDealer(this.state.dealer, this.#dealerContext(now), this.#dealerRng, now);
+    this.#noticeStare(now);
+    this.#noticeClock(now);
+    // A challenge nobody finished is judged on what arrived, when its time is
+    // up — and the player hears how it went straight away.
+    for (const { seatIndex } of expireComposure(this.state.composure, this.#composureKinds, now)) {
+      const player = this.state.players.find((p) => p.seatIndex === seatIndex);
+      if (player) this.#flushTo(player.playerId);
+    }
+    const pressures = this.#standingPressure(now);
+    settleStress(this.state.stress, pressures, now);
+    this.#telemetry?.settled(now, pressures, (seatIndex) => stressOf(this.state.stress, seatIndex, now));
+  }
+
+  /**
+   * The Dealer has just turned his head toward somebody.
+   *
+   * The standing floor already covers being looked at; this is the jolt of the
+   * moment he turns, and it lands harder the darker the room has got — see
+   * `stareIntensity`. Public: his gaze and the room's dread are both in every
+   * presence frame.
+   */
+  #noticeStare(now: number): void {
+    const gaze = this.state.dealer.gaze;
+    const seat = gaze.kind === 'SEAT' ? gaze.seatIndex : null;
+    if (seat === this.#watchedSeat) return;
+    this.#watchedSeat = seat;
+    if (seat === null) return;
+
+    const seated = this.state.table?.seats.some((s) => s.seatIndex === seat && s.seated) ?? false;
+    const last = this.#lastWatched.get(seat);
+    if (!seated || (last !== undefined && now - last < TRIGGERS.watchedCooldownMs)) return;
+    this.#lastWatched.set(seat, now);
+    this.#spike(seat, 'WATCHED', stareIntensity(this.#dread(now)), now);
+  }
+
+  /**
+   * The acting player's clock is nearly out.
+   *
+   * Once per decision, and only for a clock that started longer than the
+   * warning — a disconnected player's short clock would otherwise fire the
+   * instant it was armed. Public: the countdown is on everybody's screen.
+   */
+  #noticeClock(now: number): void {
+    const deadline = this.state.actionDeadline;
+    const seat = this.state.table?.hand?.actingSeat ?? null;
+    if (deadline === null || seat === null || deadline === this.#clockLowFor) return;
+    if (this.#armedMs <= TRIGGERS.clockLowMs || deadline - now > TRIGGERS.clockLowMs) return;
+    this.#clockLowFor = deadline;
+    this.#spike(seat, 'CLOCK_LOW', 1, now);
+  }
+
+  /**
+   * They lifted their cards to read them again.
+   *
+   * Counted from the curl the table receives (see `LOOK` in `presence.ts`), so
+   * it fires for exactly the movement everybody else could have watched. The
+   * first look of a hand is free — everybody has to look once — and folded
+   * players have nothing left to re-check.
+   */
+  #noticeRecheck(seatIndex: number, now: number): void {
+    const record = this.state.presence.find((r) => r.seatIndex === seatIndex);
+    if (!record || record.looksThisHand < 2) return;
+    const hand = this.state.table?.hand;
+    if (this.state.phase !== 'HAND_IN_PROGRESS' || !hand) return;
+    if (!hand.seats.some((s) => s.seatIndex === seatIndex && !s.folded)) return;
+
+    const last = this.#lastRecheck.get(seatIndex);
+    if (last !== undefined && now - last < TRIGGERS.recheckCooldownMs) return;
+    this.#lastRecheck.set(seatIndex, now);
+    this.#spike(seatIndex, 'RE_CHECKED', 1, now);
+  }
+
+  /**
+   * The room's dread, as the stress model reads it.
+   *
+   * To a thousandth. Far finer than anything can feel, and coarse enough that
+   * the room's slow darkening does not change every seat's pressure on every
+   * tick — which is what lets a recording store only the changes.
+   */
+  #dread(now: number): number {
+    return Math.round(roomDread(this.state, now) * 1000) / 1000;
+  }
+
+  /** One stress event, to the model and to whoever is recording it. */
+  #spike(seatIndex: number, name: StressEvent, intensity: number, now: number): void {
+    applyStressEvent(this.state.stress, seatIndex, name, now, intensity);
+    this.#telemetry?.event(now, seatIndex, name, intensity);
+  }
+
+  /**
+   * What is weighing on each seat that has not stopped weighing on them.
+   *
+   * Stacks, blinds, the room, and whether the thing at the head of the table is
+   * looking at them. Every one of these is on the felt in front of everybody —
+   * see the rule at the top of `shared/src/stress.ts`, which this method is the
+   * main opportunity to break.
+   */
+  #standingPressure(now: number): StandingPressure[] {
+    const table = this.state.table;
+    if (!table) return [];
+
+    const bigBlind = levelAt(this.state.structure, table.levelIndex).bigBlind;
+    const dread = this.#dread(now);
+    const watching = this.state.dealer.gaze;
+    const watchedSeat = watching.kind === 'SEAT' ? watching.seatIndex : null;
+    const hand = table.hand;
+
+    return table.seats
+      .filter((seat) => seat.seated)
+      .map((seat) => ({
+        seatIndex: seat.seatIndex,
+        stackBlinds: bigBlind > 0 ? seat.stack / bigBlind : Number.POSITIVE_INFINITY,
+        dread,
+        watched: seat.seatIndex === watchedSeat,
+        inHand: (hand?.seats ?? []).some((s) => s.seatIndex === seat.seatIndex && !s.folded),
+      }));
+  }
+
+  /**
+   * The world the Dealer is allowed to react to.
+   *
+   * Assembled here, from public facts only. Every field is something a person
+   * sitting at this table could see for themselves; nothing in it comes from a
+   * deck, a hole card or a hand ranking. See `dealer.ts` for why that boundary
+   * is the whole point, and `dealer.test.ts` for the test that holds it.
+   */
+  #dealerContext(now: number): DealerContext {
+    const table = this.state.table;
+    const hand = table?.hand ?? null;
+    const seated = (table?.seats ?? []).filter((seat) => seat.seated).map((s) => s.seatIndex);
+
+    return {
+      dealtAt: this.state.dealer.dealtAt,
+      now,
+      handInProgress: this.state.phase === 'HAND_IN_PROGRESS',
+      actingSeat: hand?.actingSeat ?? null,
+      seats: seated,
+      liftedSeats: this.state.presence
+        .filter((record) => record.lift > 0.15 && now - record.lastReportAt < PRESENCE.graceMs)
+        .map((record) => record.seatIndex),
+      dread: roomDread(this.state, now),
+    };
+  }
+
+  /** The table's bodies. Public to everyone, so there is no viewer argument. */
+  presenceFor(): PresenceFrame {
+    return presenceFrame(this.state, this.#clock.now());
+  }
+
+  /** One player's own heart. Private, so there is a viewer argument. */
+  selfFor(playerId: string): SelfFrame {
+    return selfFrame(this.state, playerId, this.#clock.now());
   }
 
   dispose(): void {
@@ -177,6 +467,12 @@ export class Match {
     this.state.players.push(player);
     this.state.players.sort((a, b) => a.seatIndex - b.seatIndex);
 
+    // A lobby everybody walked out of still has its code, and somebody may yet
+    // use it. `leave` hands the host chair on when there is somebody to hand it
+    // to; when there was not, the host is nobody, and a lobby whose host is
+    // nobody can never be started.
+    if (!findPlayer(this.state, this.state.hostPlayerId)) this.state.hostPlayerId = playerId;
+
     this.#emit({ type: 'PLAYER_JOINED', playerId, displayName, seatIndex });
     this.#flush();
     return player;
@@ -191,6 +487,10 @@ export class Match {
     }
     const index = this.state.players.findIndex((p) => p.playerId === playerId);
     if (index < 0) return;
+    forgetSeat(this.state.presence, this.state.players[index]!.seatIndex);
+    forgetStress(this.state.stress, this.state.players[index]!.seatIndex);
+    forgetComposure(this.state.composure, this.state.players[index]!.seatIndex);
+    this.#telemetry?.forgot(this.#clock.now(), this.state.players[index]!.seatIndex);
     this.state.players.splice(index, 1);
 
     if (this.state.hostPlayerId === playerId && this.state.players[0]) {
@@ -207,6 +507,14 @@ export class Match {
     if (connected) player.timeouts = 0;
 
     this.#emit({ type: 'PLAYER_CONNECTION', playerId, connected });
+
+    // A finished game is waiting on one person: the host, to lay the table
+    // again. If that is who just walked out, the chair passes to whoever is
+    // still here, or the room is stuck behind somebody who has gone home.
+    if (!connected && this.state.status === 'FINISHED' && playerId === this.state.hostPlayerId) {
+      const heir = this.state.players.find((p) => p.connected);
+      if (heir) this.state.hostPlayerId = heir.playerId;
+    }
 
     // A player who drops on their turn should not hold the table for 30 seconds,
     // and one who comes back mid-turn deserves their full clock again.
@@ -256,10 +564,70 @@ export class Match {
       seatCount: this.state.seatCount,
     });
     this.state.status = 'IN_PROGRESS';
+    // Fixed here and never touched again: the room's dread measures empty
+    // chairs against how many were filled when the evening began.
+    this.state.startingPlayers = this.state.players.length;
     this.state.clockRunningSince = this.#clock.now();
 
     this.#emit({ type: 'MATCH_STARTED', seatCount: this.state.players.length });
     this.#beginHand();
+  }
+
+  /**
+   * Lays the table again: same room, same code, same people, a new evening.
+   *
+   * Only the host, and only once the game is over. Whoever is still connected
+   * comes back to the lobby in the chair they had, nobody is ready, and anybody
+   * who has gone is not waited for — their chair is simply free.
+   *
+   * Everything else is thrown away and made new: the table, the room's dread,
+   * everybody's nerves, the Dealer, the blind clock. The rule is that a second
+   * evening must be indistinguishable from a first, so nothing here is reset
+   * field by field where it can be rebuilt whole.
+   *
+   * `telemetry`, when given, replaces whoever was recording: one recording is
+   * one evening.
+   */
+  rematch(playerId: string, telemetry?: StressObserver | null): void {
+    if (this.state.status !== 'FINISHED') {
+      throw new MatchError('NOT_READY', 'The game is not over yet');
+    }
+    if (playerId !== this.state.hostPlayerId) {
+      throw new MatchError('NOT_HOST', 'Only the host can deal again');
+    }
+
+    this.#clock.clearTimeout(this.#timer);
+    this.#timer = null;
+    this.#pendingEvents = [];
+    this.#armedMs = 0;
+    this.#clockLowFor = null;
+    this.#watchedSeat = null;
+    this.#lastRecheck = new Map();
+    this.#lastWatched = new Map();
+    if (telemetry !== undefined) this.#telemetry = telemetry;
+
+    const state = this.state;
+    state.players = state.players
+      .filter((player) => player.connected)
+      .map((player) => ({ ...player, ready: false, eliminatedAt: null, place: null, timeouts: 0 }));
+    state.status = 'LOBBY';
+    state.phase = 'LOBBY';
+    state.table = null;
+    state.presence = createPresence();
+    state.stress = createStress(this.#stressTuning);
+    state.dealer = createDealer(this.#clock.now());
+    state.composure = createComposure();
+    state.startingPlayers = 0;
+    state.sacrifices = 0;
+    state.clockElapsedMs = 0;
+    state.clockRunningSince = null;
+    state.actionDeadline = null;
+    state.runout = null;
+    state.lastResult = null;
+    state.winnerPlayerId = null;
+
+    this.#emit({ type: 'MATCH_RESET' });
+    this.#flush();
   }
 
   // -------------------------------------------------------------------------
@@ -287,14 +655,122 @@ export class Match {
     this.#applyAction(player.seatIndex, action);
   }
 
+  // -------------------------------------------------------------------------
+  // Bodies
+  // -------------------------------------------------------------------------
+
+  /**
+   * Records what a player's body is doing.
+   *
+   * Deliberately silent: it does not flush, because presence is broadcast on its
+   * own tick. Pushing a full view every time somebody turned their head would be
+   * six players' worth of chips, cards and legal actions fifteen times a second,
+   * for a game in which nothing had happened.
+   */
+  reportPresence(playerId: string, input: PresenceInput): void {
+    const player = findPlayer(this.state, playerId);
+    if (!player || player.eliminatedAt !== null) return;
+    const now = this.#clock.now();
+    const { looked } = reportPresence(this.state.presence, player.seatIndex, input, now);
+    if (looked) this.#noticeRecheck(player.seatIndex, now);
+  }
+
+  /**
+   * "I am lifting my cards."
+   *
+   * The reply is not the cards. It is a fresh view, which *contains* the cards
+   * because the seat is now marked as having looked — the same single boundary
+   * every other byte of match state goes through.
+   *
+   * Peeking is not narrated as an event. A permanent line in the log saying
+   * "seat 3 checked their cards" would be a better record than anyone at a real
+   * table has; observation here should be live, fallible and easy to miss.
+   */
+  peek(playerId: string, handNumber: number): void {
+    const player = findPlayer(this.state, playerId);
+    if (!player) throw new MatchError('NOT_FOUND', 'You are not in this match');
+
+    const hand = this.state.table?.hand;
+    if (this.state.phase !== 'HAND_IN_PROGRESS' || !hand) {
+      throw new MatchError('NOT_YOUR_TURN', 'There is no hand to look at');
+    }
+    if (hand.handNumber !== handNumber) {
+      throw new MatchError('STALE_HAND', 'That hand has ended');
+    }
+
+    const seat = hand.seats.find((s) => s.seatIndex === player.seatIndex);
+    if (!seat?.holeCards) {
+      throw new MatchError('ILLEGAL_ACTION', 'You have no cards in this hand');
+    }
+
+    const first = markPeeked(this.state.presence, player.seatIndex, handNumber, this.#clock.now());
+    // Only the first look changes what this player may be sent, and only they
+    // need telling. Later looks are already visible to the table through
+    // presence and cost nothing here.
+    //
+    // To them alone. This used to be a plain flush, which pushed a fresh view
+    // to the whole table at the instant somebody first looked: nothing in it
+    // was secret, but it was an exact copy of a tell the table is supposed to
+    // get only by watching, and it rebuilt every other player's overlay — bet
+    // slider included — for a change that was none of their business.
+    if (first) this.#flushTo(playerId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Composure
+  // -------------------------------------------------------------------------
+
+  /**
+   * "Let me steady myself."
+   *
+   * The server picks the challenge and its parameters. The reply is a fresh
+   * view with the challenge in it, to this player only.
+   */
+  beginComposure(playerId: string): void {
+    const player = findPlayer(this.state, playerId);
+    if (!player) throw new MatchError('NOT_FOUND', 'You are not in this match');
+    if (this.state.status !== 'IN_PROGRESS' || player.eliminatedAt !== null) {
+      throw new MatchError('NOT_READY', 'There is nothing to steady yourself for');
+    }
+    const now = this.#clock.now();
+    const refusal = canBegin(this.state.composure, player.seatIndex, now);
+    if (refusal === 'BUSY') throw new MatchError('NOT_READY', 'You are already steadying yourself');
+    if (refusal === 'COOLING_DOWN') throw new MatchError('NOT_READY', 'Not yet');
+
+    beginComposure(this.state.composure, player.seatIndex, this.#composureKinds, this.#composureRng, now);
+    this.#flushTo(playerId);
+  }
+
+  /**
+   * A key going down or coming up during a challenge, timed on arrival.
+   *
+   * Never an error: an input for a challenge that has ended, or was never
+   * this player's, is simply nothing. Pushes a view only when it finished the
+   * challenge, so the player learns how it went.
+   */
+  composureInput(playerId: string, challengeId: string, input: ComposureInput): void {
+    const player = findPlayer(this.state, playerId);
+    if (!player || player.eliminatedAt !== null) return;
+    const result = composureInput(
+      this.state.composure,
+      player.seatIndex,
+      challengeId,
+      input,
+      this.#composureKinds,
+      this.#clock.now(),
+    );
+    if (result) this.#flushTo(playerId);
+  }
+
   #applyAction(seatIndex: number, action: PlayerAction): void {
     this.#clock.clearTimeout(this.#timer);
     this.#timer = null;
 
+    let events: MatchEvent[];
     try {
       const step = act(this.state.table!, seatIndex, action);
       this.state.table = step.table;
-      for (const event of step.events) this.#emit(event);
+      events = step.events;
     } catch (error) {
       // Re-arm so a rejected action does not leave the table waiting forever.
       this.#armActionTimer();
@@ -303,11 +779,66 @@ export class Match {
     }
 
     if (this.state.table!.status === 'AWAITING_SETTLEMENT') {
-      this.#scheduleSettlement();
+      this.#concludeHand(events);
     } else {
+      for (const event of events) this.#emit(event);
       this.#armActionTimer();
     }
     this.#flush();
+  }
+
+  /**
+   * The engine has finished the hand. Tell the table — at once, or in acts.
+   *
+   * Usually at once. But when the hand ended with cards still to come and
+   * nobody able to bet on them, the engine dealt them all in this one step,
+   * and the table is told a street at a time instead: see `runout.ts`.
+   *
+   * Events are *emitted* as they are told, not as they happened, and that is
+   * load-bearing. Stress is raised from emitted events and tells are
+   * broadcast, so a result emitted early would be on the winner's hands before
+   * it was on the felt.
+   */
+  #concludeHand(events: MatchEvent[]): void {
+    const acts = splitRunout(events);
+    const hand = this.state.table!.hand!;
+    if (!acts || !hand.result?.showdown) {
+      for (const event of events) this.#emit(event);
+      this.#scheduleSettlement();
+      return;
+    }
+
+    this.state.actionDeadline = null;
+    this.state.runout = { boardShown: hand.board.length - acts.streets.reduce((n, act) => n + streetCards(act), 0) };
+    for (const event of acts.opening) this.#emit(event);
+    // The hands go over. The cards, and not a word about what they make.
+    this.#emit({
+      type: 'ALL_IN_SHOWDOWN',
+      hands: hand.result.showdown
+        .map((reveal) => ({ seatIndex: reveal.seatIndex, holeCards: [...reveal.holeCards] }))
+        .sort((a, b) => a.seatIndex - b.seatIndex),
+    });
+
+    const pending = [...acts.streets];
+    const next = (): void => {
+      if (this.#disposed) return;
+      const act = pending.shift();
+      if (act) {
+        this.state.runout = { boardShown: this.state.runout!.boardShown + streetCards(act) };
+        for (const event of act) this.#emit(event);
+        this.#timer = this.#clock.setTimeout(
+          next,
+          pending.length > 0 ? this.#timings.runoutStreetMs : this.#timings.runoutSettleMs,
+        );
+      } else {
+        // The last card has been looked at. Now who won.
+        this.state.runout = null;
+        for (const event of acts.closing) this.#emit(event);
+        this.#scheduleSettlement();
+      }
+      this.#flush();
+    };
+    this.#timer = this.#clock.setTimeout(next, this.#timings.runoutRevealMs);
   }
 
   #actingPlayer(): PlayerRecord | undefined {
@@ -338,6 +869,7 @@ export class Match {
         : this.#timings.actionTimeoutMs;
 
     this.state.actionDeadline = this.#clock.now() + ms;
+    this.#armedMs = ms;
     this.#timer = this.#clock.setTimeout(() => this.#onActionTimeout(), ms);
   }
 
@@ -419,6 +951,7 @@ export class Match {
       this.state.table = eliminate(this.state.table!, seatIndex);
       player.eliminatedAt = this.#clock.now();
       player.place = place;
+      forgetComposure(this.state.composure, seatIndex);
       this.#emit({
         type: 'PLAYER_ELIMINATED',
         playerId: player.playerId,
@@ -440,17 +973,20 @@ export class Match {
 
     this.#advanceBlindLevel();
     this.state.lastResult = null;
+    // Bodies carry over between hands; the record of having looked does not.
+    // Everybody lifts their cards again, in front of everybody, every hand.
+    resetForHand(this.state.presence, this.#clock.now());
 
     const step = startHand(this.state.table!, this.#rng);
     this.state.table = step.table;
     this.state.phase = 'HAND_IN_PROGRESS';
-    for (const event of step.events) this.#emit(event);
 
     // A hand can be over before anyone acts when every stack is swallowed by
-    // the blinds.
+    // the blinds — and that, too, is a board run out with nobody able to bet.
     if (this.state.table.status === 'AWAITING_SETTLEMENT') {
-      this.#scheduleSettlement();
+      this.#concludeHand(step.events);
     } else {
+      for (const event of step.events) this.#emit(event);
       this.#armActionTimer();
     }
     this.#flush();
@@ -496,6 +1032,109 @@ export class Match {
 
   #emit(event: MatchEvent): void {
     this.#pendingEvents.push(event);
+
+    // The one place that notices cards and chips physically moving, so his
+    // hands can be doing it. Every route into a deal already comes through
+    // here, which is why it is the right hook: the alternative was asking the
+    // match whether it was mid-deal, and the match is never mid-anything.
+    if (MOVED_BY_HIS_HANDS.has(event.type)) {
+      this.state.dealer.dealtAt = this.#clock.now();
+    }
+    this.#raiseStress(event);
+  }
+
+  /**
+   * Turns what just happened into what it does to people.
+   *
+   * One place, reading the event payloads and the public table, so there is one
+   * place to check against the rule: **nothing here may consult a card.** Every
+   * line below works from chips, stacks and seat numbers — all of which are on
+   * everybody's screen already. `stress-boundary.test.ts` proves it by running
+   * two tables over different decks and requiring identical heart rates.
+   */
+  #raiseStress(event: MatchEvent): void {
+    const now = this.#clock.now();
+    const table = this.state.table;
+    const spike = (seatIndex: number, name: StressEvent, intensity = 1) =>
+      this.#spike(seatIndex, name, intensity, now);
+    const everyone = (name: StressEvent, intensity = 1) => {
+      for (const seat of table?.seats ?? []) {
+        if (seat.seated) spike(seat.seatIndex, name, intensity);
+      }
+    };
+    const stackOf = (seatIndex: number) =>
+      table?.seats.find((seat) => seat.seatIndex === seatIndex)?.stack ?? 0;
+
+    switch (event.type) {
+      case 'HOLE_CARDS_DEALT':
+        for (const seatIndex of event.seats) spike(seatIndex, 'DEALT_IN');
+        return;
+
+      case 'ACTION_REQUIRED': {
+        const owed = event.legal.callAmount;
+        if (owed <= 0) return;
+        // How much of what they have left this would cost them. A shove at
+        // somebody is terrifying in proportion to their stack, not to the pot.
+        const stack = Math.max(stackOf(event.seatIndex), 1);
+        const share = Math.min(owed / stack, 1);
+        // Calling would be for everything they have.
+        if (share >= 0.95) spike(event.seatIndex, 'FACED_ALL_IN', 1);
+        else spike(event.seatIndex, 'FACED_BET', share);
+        return;
+      }
+
+      case 'PLAYER_ACTED': {
+        if (event.allIn) {
+          spike(event.seatIndex, 'SHOVED');
+          return;
+        }
+        const action = event.action;
+        const amount = 'amount' in action ? action.amount : 0;
+        if (amount <= 0) return;
+        const after = Math.max(event.stack, 1);
+        spike(event.seatIndex, 'COMMITTED', Math.min(amount / (amount + after), 1));
+        return;
+      }
+
+      case 'BLIND_LEVEL_UP':
+        everyone('BLINDS_UP');
+        return;
+
+      case 'PLAYER_ELIMINATED':
+        // Everybody still sitting watches a chair go empty.
+        everyone('SEAT_EMPTIED');
+        return;
+
+      case 'HAND_COMPLETE': {
+        // Who gained and who lost, from the result's own net change — chips,
+        // never cards. A player who folded early is in here at zero and so
+        // spikes at neither.
+        for (const [seat, net] of Object.entries(event.result.netChange)) {
+          const seatIndex = Number(seat);
+          if (net === 0) continue;
+          const stack = Math.max(stackOf(seatIndex), 1);
+          const size = Math.min(Math.abs(net) / stack, 1);
+          spike(seatIndex, net > 0 ? 'WON_POT' : 'LOST_POT', size);
+        }
+        return;
+      }
+
+      default:
+        return;
+    }
+  }
+
+  /**
+   * Tells one player their own view has changed, and nobody else anything.
+   *
+   * For changes that are private by design. A view pushed to the whole table
+   * at the moment somebody began steadying themselves would announce it as
+   * surely as a line in the log: nothing visible changed, and yet everybody's
+   * screen updated.
+   */
+  #flushTo(playerId: string): void {
+    if (this.#pendingEvents.length > 0) return this.#flush();
+    for (const listener of this.#listeners) listener([], playerId);
   }
 
   /** Hands the batch of events since the last flush to every subscriber. */

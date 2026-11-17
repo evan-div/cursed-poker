@@ -1,5 +1,9 @@
 import type { BlindStructure, HandResult, MatchPhase, MatchStatus } from '@cursed/shared';
 import type { TableState } from '../poker/index.js';
+import type { DealerState } from './dealer.js';
+import type { PresenceState } from './presence.js';
+import type { StressState } from './stress.js';
+import type { ComposureState } from './composure/index.js';
 
 /**
  * Authoritative match state.
@@ -40,6 +44,54 @@ export interface MatchState {
   table: TableState | null;
 
   /**
+   * Bodies: gaze, card peeking, hands on chips.
+   *
+   * Deliberately beside the table rather than inside it. Nothing in `presence`
+   * can reach a hand, and the only thing a hand reads back is whether a player
+   * has looked at their own cards — one bit, never what they saw.
+   */
+  presence: PresenceState;
+
+  /**
+   * How frightened everybody is.
+   *
+   * Beside the table like `presence`, and under the same prohibition in the
+   * opposite direction: nothing here may read a hand. See `stress.ts`.
+   */
+  stress: StressState;
+
+  /**
+   * The Dealer's body: where he is looking, what he is doing, when he last
+   * moved. Beside the table for the same reason `presence` is — he cannot
+   * reach a hand, and no hand reads anything back from him.
+   */
+  dealer: DealerState;
+
+  /**
+   * Who is in the middle of steadying themselves, and how the last attempt
+   * went. Sits between `stress` and the broadcast: it changes what the table
+   * is shown, never what anybody actually feels. See `composure/`.
+   */
+  composure: ComposureState;
+
+  /**
+   * How many players who sat down at the start. Fixed once the match begins.
+   *
+   * The room's dread is measured against it: three empty chairs out of six is a
+   * different evening from three out of four.
+   */
+  startingPlayers: number;
+
+  /**
+   * How much of themselves players have given up, in total.
+   *
+   * Zero, and only ever written by Phase 9. It is here now because the dread
+   * model takes it as an input, and a model with a hole in it where its third
+   * term goes is one that gets retuned the moment the term arrives.
+   */
+  sacrifices: number;
+
+  /**
    * The blind clock, split so it can be paused. Phase 8's perk ritual and any
    * future forced interruption stop the clock rather than letting blinds climb
    * through a cutscene.
@@ -49,6 +101,16 @@ export interface MatchState {
 
   /** Epoch ms by which the acting seat must act, or null. */
   actionDeadline: number | null;
+
+  /**
+   * An all-in hand being told a street at a time, or null.
+   *
+   * The engine has already finished the hand — `table.hand` holds the whole
+   * board and the result — and the table has so far been shown only the first
+   * `boardShown` cards of it. `projection.ts` reads this to hold the rest back.
+   * See `runout.ts`.
+   */
+  runout: { boardShown: number } | null;
   /** The hand just finished, held so players can read the result. */
   lastResult: HandResult | null;
   winnerPlayerId: string | null;

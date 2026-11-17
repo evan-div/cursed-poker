@@ -1,0 +1,463 @@
+import { describe, expect, it } from 'vitest';
+import { Mesh, Quaternion, Vector3, type Object3D } from 'three';
+import { Avatar } from './avatar.js';
+import { gazePoint } from './gaze.js';
+import { gripPose } from './hold.js';
+import { TABLE } from './layout.js';
+import { STILL_MOTION, type TellMotion } from './tells.js';
+
+/**
+ * Bodies at the table.
+ *
+ * The test that matters here is that a head stays on its shoulders. The head
+ * group's origin is its pivot, and it used to sit at the avatar's *feet* with
+ * the skull positioned a metre and a fifth up inside it — so turning to look at
+ * somebody swung the head through a metre-wide arc around the floor and sent it
+ * sailing across the room. It looked like a rendering glitch and it was a
+ * transform-order mistake, which is the kind that only a screenshot finds.
+ */
+
+const SEATS = [0, 1, 2, 3, 4, 5];
+
+function skullPosition(avatar: Avatar): Vector3 {
+  avatar.group.updateMatrixWorld(true);
+  return avatar.skull.getWorldPosition(new Vector3());
+}
+
+/** Runs the easing to completion, so the head reaches where it is aiming. */
+function settle(avatar: Avatar): void {
+  for (let i = 0; i < 400; i++) avatar.update(1 / 60);
+}
+
+describe('a head on a neck', () => {
+  it('stays on its shoulders whatever it looks at', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      const rest = skullPosition(avatar);
+
+      for (const target of [
+        { kind: 'DEALER' },
+        { kind: 'BOARD' },
+        { kind: 'POT' },
+        { kind: 'OWN_CARDS' },
+        { kind: 'OWN_CHIPS' },
+        ...SEATS.filter((s) => s !== seatIndex).map((s) => ({ kind: 'SEAT' as const, seatIndex: s })),
+      ] as const) {
+        avatar.setGaze(target);
+        settle(avatar);
+
+        // A head swivels. It does not travel: anything beyond a few centimetres
+        // means it is pivoting about the wrong point.
+        const moved = skullPosition(avatar).distanceTo(rest);
+        expect(moved, `seat ${seatIndex} looking at ${target.kind} moved its head ${moved.toFixed(2)}m`)
+          .toBeLessThan(0.12);
+      }
+    }
+  });
+
+  it('keeps the head above the table, not swinging under it', () => {
+    const avatar = new Avatar(0);
+    for (const target of [{ kind: 'OWN_CARDS' }, { kind: 'DEALER' }] as const) {
+      avatar.setGaze(target);
+      settle(avatar);
+      expect(skullPosition(avatar).y).toBeGreaterThan(1);
+    }
+  });
+
+  it('turns toward what it is told to look at', () => {
+    // Two subjects on opposite sides of a seat turn the head opposite ways.
+    const avatar = new Avatar(0);
+    avatar.setGaze({ kind: 'SEAT', seatIndex: 1 });
+    settle(avatar);
+    const oneWay = avatar.headYaw;
+
+    avatar.setGaze({ kind: 'SEAT', seatIndex: 5 });
+    settle(avatar);
+    expect(Math.sign(avatar.headYaw)).not.toBe(Math.sign(oneWay));
+  });
+
+  it('holds still when its owner is looking at nothing', () => {
+    // AWAY is most of what a sweeping look passes through. Snapping to a canned
+    // pose every time it did was most of why heads used to shake.
+    const avatar = new Avatar(2);
+    avatar.setGaze({ kind: 'SEAT', seatIndex: 4 });
+    settle(avatar);
+    const held = avatar.headYaw;
+
+    avatar.setGaze({ kind: 'AWAY' });
+    settle(avatar);
+    expect(avatar.headYaw).toBeCloseTo(held, 9);
+  });
+
+  it('will not crane further than a neck goes', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      for (const other of SEATS) {
+        if (other === seatIndex) continue;
+        avatar.setGaze({ kind: 'SEAT', seatIndex: other });
+        settle(avatar);
+        expect(Math.abs(avatar.headYaw)).toBeLessThanOrEqual((72 * Math.PI) / 180 + 1e-9);
+      }
+    }
+  });
+
+  it('looks down at its own cards, and up at the thing standing over the table', () => {
+    // Which way a face points, asked of the skull itself. Heads used to pitch
+    // the wrong way round — down at your cards tipped the face at the ceiling —
+    // and nothing noticed, because a head that is a rounded box looks the same
+    // tilted either way. The moment heads had faces, every player at the table
+    // was staring at the lamp.
+    const facing = (avatar: Avatar) => {
+      avatar.group.updateMatrixWorld(true);
+      return new Vector3(0, 0, 1).applyQuaternion(avatar.skull.getWorldQuaternion(new Quaternion()));
+    };
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      avatar.setGaze({ kind: 'OWN_CARDS' });
+      settle(avatar);
+      expect(facing(avatar).y, `seat ${seatIndex} looking at its cards`).toBeLessThan(-0.3);
+
+      avatar.setGaze({ kind: 'DEALER' });
+      settle(avatar);
+      expect(facing(avatar).y, `seat ${seatIndex} looking at the Dealer`).toBeGreaterThan(0.05);
+    }
+  });
+
+  it('aims at a point a head could actually be', () => {
+    // Sanity on the other half: the thing a head is aimed *at* is up where a
+    // face is, not down at the floor.
+    for (const seatIndex of SEATS) {
+      const at = gazePoint({ kind: 'SEAT', seatIndex }, 0)!;
+      expect(at.y).toBeGreaterThan(1);
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Hands
+// ---------------------------------------------------------------------------
+
+/** Where a named part of the avatar has ended up in the world. */
+function worldOf(avatar: Avatar, object: Object3D): Vector3 {
+  avatar.group.updateMatrixWorld(true);
+  return object.getWorldPosition(new Vector3());
+}
+
+/** The far end of one digit — the part that actually touches a card. */
+function tipOf(avatar: Avatar, hand: 0 | 1, finger: number): Vector3 {
+  const knuckle = avatar.hands[hand]!.fingers[finger]!;
+  avatar.group.updateMatrixWorld(true);
+  // The bone hangs off the knuckle along its own +Z, so the tip is its far end.
+  const bone = knuckle.children[0] as Mesh;
+  return bone.localToWorld(new Vector3(0, 0, (bone.userData.length as number) / 2));
+}
+
+/** The tip of the middle finger of a hand, which is what touches a card. */
+function fingertip(avatar: Avatar, hand: 0 | 1): Vector3 {
+  return tipOf(avatar, hand, 2);
+}
+
+describe('hands on the cards', () => {
+  it('leaves both hands on the felt when nobody is touching anything', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      settle(avatar);
+      for (const hand of [0, 1] as const) {
+        const at = worldOf(avatar, avatar.hands[hand]!.group);
+        expect(Math.abs(at.y - TABLE.surfaceHeight)).toBeLessThan(0.1);
+      }
+    }
+  });
+
+  it('reaches the right hand to the corner it is curling', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      avatar.setPeek(1, 0);
+      settle(avatar);
+
+      const contact = gripPose(seatIndex, 1, 0).at;
+      const tip = fingertip(avatar, 0);
+      const missed = tip.distanceTo(new Vector3(contact.x, contact.y, contact.z));
+      expect(missed, `seat ${seatIndex} missed the card by ${missed.toFixed(3)}m`).toBeLessThan(0.1);
+    }
+  });
+
+  it('carries the cards up with the hand rather than letting them float', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      avatar.setPeek(1, 1);
+      settle(avatar);
+
+      const grip = gripPose(seatIndex, 1, 1);
+      const at = new Vector3(grip.at.x, grip.at.y, grip.at.z);
+      // The pinch is the gap between the thumb and the fingers, so that is what
+      // has to arrive on the cards — not the wrist, and not one fingertip.
+      const pinch = tipOf(avatar, 0, 0).lerp(fingertip(avatar, 0), 0.5);
+      const missed = pinch.distanceTo(at);
+      expect(missed, `seat ${seatIndex} let its cards float by ${missed.toFixed(3)}m`).toBeLessThan(
+        0.07,
+      );
+      // And it is genuinely up off the table, not still on the felt.
+      expect(pinch.y).toBeGreaterThan(TABLE.surfaceHeight + 0.15);
+    }
+  });
+
+  it('pinches the pair rather than balancing it on the fingers', () => {
+    for (const seatIndex of SEATS) {
+      const avatar = new Avatar(seatIndex);
+      avatar.setPeek(1, 1);
+      settle(avatar);
+
+      const grip = gripPose(seatIndex, 1, 1);
+      const at = new Vector3(grip.at.x, grip.at.y, grip.at.z);
+      // `up` comes out of the cards' backs, away from the player.
+      const behind = new Vector3(grip.up.x, grip.up.y, grip.up.z);
+
+      const thumb = tipOf(avatar, 0, 0).sub(at).dot(behind);
+      const finger = fingertip(avatar, 0).sub(at).dot(behind);
+
+      // The cards pass between them: the fingers lie flat behind, the thumb has
+      // come round onto the printed side. Both on one side is a hand holding air
+      // — or a pair balanced on top of the knuckles, which is what this
+      // replaced.
+      expect(thumb, `seat ${seatIndex} thumb`).toBeLessThan(0);
+      expect(finger, `seat ${seatIndex} fingers`).toBeGreaterThan(0);
+      // And close enough together to be gripping rather than spanning.
+      expect(finger - thumb).toBeLessThan(0.07);
+    }
+  });
+
+  it('brings the off hand up to shield a raised pair, and not before', () => {
+    const avatar = new Avatar(0);
+    settle(avatar);
+    const resting = worldOf(avatar, avatar.hands[1]!.group).y;
+
+    avatar.setPeek(1, 0);
+    settle(avatar);
+    expect(worldOf(avatar, avatar.hands[1]!.group).y).toBeCloseTo(resting, 2);
+
+    avatar.setPeek(1, 1);
+    settle(avatar);
+    expect(worldOf(avatar, avatar.hands[1]!.group).y).toBeGreaterThan(resting + 0.1);
+  });
+
+  it('curls the fingers as the corner comes up, and opens them again', () => {
+    const avatar = new Avatar(3);
+    settle(avatar);
+    const open = avatar.hands[0]!.fingers[2]!.rotation.x;
+
+    avatar.setPeek(1, 0);
+    settle(avatar);
+    expect(avatar.hands[0]!.fingers[2]!.rotation.x).toBeGreaterThan(open + 0.3);
+
+    avatar.setPeek(0, 0);
+    settle(avatar);
+    expect(avatar.hands[0]!.fingers[2]!.rotation.x).toBeCloseTo(open, 2);
+  });
+
+  it('keeps the arm an arm: bones do not stretch to reach', () => {
+    const avatar = new Avatar(0);
+    const lengths: number[] = [];
+    for (const lift of [0, 0.5, 1]) {
+      avatar.setPeek(1, lift);
+      settle(avatar);
+      const wrist = worldOf(avatar, avatar.hands[0]!.group);
+      const shoulder = worldOf(avatar, avatar.group);
+      lengths.push(wrist.distanceTo(shoulder));
+    }
+    // Every pose is within what the arm could span; none of them is absurd.
+    for (const length of lengths) expect(length).toBeLessThan(1.4);
+  });
+
+  it('goes back to the felt when the hand is put down', () => {
+    const avatar = new Avatar(2);
+    avatar.setPeek(1, 1);
+    settle(avatar);
+    avatar.setPeek(0, 0);
+    settle(avatar);
+
+    const at = worldOf(avatar, avatar.hands[0]!.group);
+    expect(Math.abs(at.y - TABLE.surfaceHeight)).toBeLessThan(0.1);
+  });
+});
+
+describe('giving it away', () => {
+  /** A hand-built motion, so the test controls exactly what the body is told. */
+  function motion(over: Partial<TellMotion> = {}): TellMotion {
+    return { ...STILL_MOTION, ...over };
+  }
+
+  function wrist(avatar: Avatar, hand: 0 | 1): Vector3 {
+    avatar.group.updateMatrixWorld(true);
+    return avatar.hands[hand]!.group.getWorldPosition(new Vector3());
+  }
+
+  it('keeps its hands on the felt while it breathes', () => {
+    // The shoulders rise on each breath and the arms with them. The hands must
+    // not: a resting hand that lifted off the table with every breath would be
+    // the whole body bobbing, not a chest.
+    const avatar = new Avatar(1);
+    settle(avatar);
+    const rest = wrist(avatar, 0);
+    for (const breath of [0.004, 0.016, 0.009, 0]) {
+      avatar.setTells(motion({ breath }));
+      avatar.update(1 / 60);
+      expect(wrist(avatar, 0).distanceTo(rest)).toBeLessThan(1e-4);
+    }
+  });
+
+  it('lifts its shoulders and head on a breath', () => {
+    const avatar = new Avatar(1);
+    settle(avatar);
+    const before = skullPosition(avatar).y;
+    avatar.setTells(motion({ breath: 0.016 }));
+    avatar.update(1 / 60);
+    expect(skullPosition(avatar).y - before).toBeCloseTo(0.016, 3);
+  });
+
+  it('moves a resting hand by exactly its tremor', () => {
+    const avatar = new Avatar(4);
+    settle(avatar);
+    const rest = wrist(avatar, 1);
+    const push = { x: 0.004, y: -0.002, z: 0.003 };
+    avatar.setTells(motion({ hands: [{ x: 0, y: 0, z: 0 }, push] }));
+    avatar.update(1 / 60);
+    const moved = wrist(avatar, 1).sub(rest);
+    expect(moved.x).toBeCloseTo(push.x, 4);
+    expect(moved.y).toBeCloseTo(push.y, 4);
+    expect(moved.z).toBeCloseTo(push.z, 4);
+  });
+
+  it('shakes a raised pair and the hand holding it together', () => {
+    // The cards are rendered by `cards.ts` and the hand by this file. If they
+    // took different pushes, a trembling player would visibly lose their grip
+    // on their own cards every frame.
+    const still = new Avatar(2);
+    const shaking = new Avatar(2);
+    for (const avatar of [still, shaking]) {
+      avatar.setPeek(1, 1);
+      settle(avatar);
+    }
+    const card = { x: 0.006, y: 0.004, z: -0.005 };
+    shaking.setTells(
+      motion({
+        hands: [{ x: 0.004, y: 0.003, z: -0.003 }, { x: 0, y: 0, z: 0 }],
+        heldCards: { offset: card, roll: 0 },
+      }),
+    );
+    shaking.update(1 / 60);
+    still.update(1 / 60);
+
+    const moved = wrist(shaking, 0).sub(wrist(still, 0));
+    expect(moved.x).toBeCloseTo(card.x, 3);
+    expect(moved.y).toBeCloseTo(card.y, 3);
+    expect(moved.z).toBeCloseTo(card.z, 3);
+  });
+
+  it('shines, and then sweats, as it gets wet', () => {
+    const avatar = new Avatar(0);
+    avatar.update(1 / 60);
+    const dry = avatar.skinRoughness;
+    expect(avatar.sweating).toBe(false);
+
+    avatar.setTells(motion({ sweat: 0.5 }));
+    avatar.update(1 / 60);
+    expect(avatar.skinRoughness).toBeLessThan(dry);
+    expect(avatar.sweating).toBe(false);
+
+    avatar.setTells(motion({ sweat: 1 }));
+    avatar.update(1 / 60);
+    expect(avatar.sweating).toBe(true);
+  });
+
+  it('sweats alone: one wet face does not wet the table', () => {
+    const wet = new Avatar(0);
+    const dry = new Avatar(1);
+    dry.update(1 / 60);
+    const before = dry.skinRoughness;
+    wet.setTells(motion({ sweat: 1 }));
+    wet.update(1 / 60);
+    dry.update(1 / 60);
+    expect(dry.skinRoughness).toBe(before);
+    expect(wet.skinRoughness).toBeLessThan(before);
+  });
+});
+
+describe('steadying themselves', () => {
+  it('bows its head, and comes back up when it stops', () => {
+    const avatar = new Avatar(3);
+    settle(avatar);
+    const level = avatar.headPitch;
+
+    avatar.setComposing(true);
+    settle(avatar);
+    expect(avatar.composing).toBeGreaterThan(0.99);
+    expect(avatar.headPitch).toBeLessThan(level - 0.2);
+    // And the face itself goes down with it: a bow, not a head thrown back.
+    avatar.group.updateMatrixWorld(true);
+    const face = new Vector3(0, 0, 1).applyQuaternion(avatar.skull.getWorldQuaternion(new Quaternion()));
+    expect(face.y).toBeLessThan(-0.2);
+
+    avatar.setComposing(false);
+    settle(avatar);
+    expect(avatar.composing).toBe(0);
+    expect(avatar.headPitch).toBeCloseTo(level, 4);
+  });
+
+  it('settles into it rather than snapping', () => {
+    const avatar = new Avatar(3);
+    avatar.setComposing(true);
+    avatar.update(1 / 60);
+    expect(avatar.composing).toBeGreaterThan(0);
+    expect(avatar.composing).toBeLessThan(0.1);
+  });
+
+  it('breathes slowly and deeply, over whatever its tells were doing', () => {
+    // A panicked body, breathing fast and shallow from its tells...
+    const panicked = { ...STILL_MOTION, breath: 0 };
+    const avatar = new Avatar(2);
+    let phase = 0;
+    const fast = (seconds: number) => {
+      let lowest = Infinity;
+      let highest = -Infinity;
+      let cycles = 0;
+      let last = 0;
+      let rising = false;
+      for (let t = 0; t < seconds; t += 1 / 60) {
+        phase += (1 / 60) * (34 / 60);
+        const breath = 0.016 * 0.5 * (1 - Math.cos(phase * Math.PI * 2));
+        avatar.setTells({ ...panicked, breath });
+        avatar.update(1 / 60);
+        const y = skullPosition(avatar).y;
+        lowest = Math.min(lowest, y);
+        highest = Math.max(highest, y);
+        if (y > last && !rising) cycles++;
+        rising = y > last;
+        last = y;
+      }
+      return { cycles, depth: highest - lowest };
+    };
+    const before = fast(20);
+
+    // ...takes a slow breath when it steadies itself.
+    avatar.setComposing(true);
+    fast(3);
+    const during = fast(20);
+    expect(during.cycles).toBeLessThan(before.cycles / 3);
+    expect(during.depth).toBeGreaterThan(before.depth);
+  });
+
+  it('keeps its hands where they were', () => {
+    const avatar = new Avatar(1);
+    settle(avatar);
+    avatar.group.updateMatrixWorld(true);
+    const rest = avatar.hands[0]!.group.getWorldPosition(new Vector3());
+    avatar.setComposing(true);
+    for (let i = 0; i < 600; i++) {
+      avatar.update(1 / 60);
+      avatar.group.updateMatrixWorld(true);
+      expect(avatar.hands[0]!.group.getWorldPosition(new Vector3()).distanceTo(rest)).toBeLessThan(1e-4);
+    }
+  });
+});

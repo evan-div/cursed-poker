@@ -1,0 +1,338 @@
+import {
+  CALM,
+  GAZE_AWAY,
+  PRESENCE,
+  gazeEquals,
+  PEEK,
+  quantisePeek,
+  type GazeTarget,
+  type PresenceFrame,
+  type PresenceInput,
+  type SeatPresence,
+  type SeatTells,
+} from '@cursed/shared';
+
+/**
+ * The table's bodies, authoritatively.
+ *
+ * This module owns every physical thing a player does that is not a poker
+ * action: where they are looking, whether their cards are lifted, whether their
+ * hands are on their chips, and how long they have been perfectly still.
+ *
+ * It is deliberately outside the poker engine and cannot reach into it. It reads
+ * nothing from a hand and writes nothing to one. The single point of contact in
+ * the other direction is `peekedHand`, which records *that* a player looked at
+ * their own cards — never what they saw.
+ *
+ * Plain data plus free functions, in the style of `match-state.ts`, so the whole
+ * thing snapshots, replays and diffs like the rest of the match.
+ */
+
+/** Smallest change in exposure anyone could actually notice. */
+const VISIBLE_MOVEMENT = 0.005;
+
+/**
+ * What counts as looking at your cards, as the table sees it.
+ *
+ * A look is the *replicated* curl rising past the point where a rank becomes
+ * readable — the same number everybody else receives, so a look is something
+ * the whole table could have watched happen, never something only the server
+ * knows. It only counts again once the cards have gone back down below
+ * `rearmBelow`: without that gap, a corner hovering around the line would be a
+ * dozen looks a second.
+ */
+export const LOOK = {
+  at: PEEK.rankVisibleAt,
+  rearmBelow: 0.15,
+} as const;
+
+export interface SeatPresenceRecord {
+  seatIndex: number;
+  /** Last reported gaze. Held after a client goes quiet: a frozen head is a fact. */
+  gaze: GazeTarget;
+  /** Last reported exposure, before decay. */
+  peek: number;
+  /** How far the cards have been picked up off the table, before decay. */
+  lift: number;
+  /** How far they are leaning in over the table, before decay. */
+  lean: number;
+  handlingChips: boolean;
+  /** Epoch ms of the last report that actually changed something. */
+  lastMovedAt: number;
+  /** Epoch ms of the last report of any kind, changed or not. */
+  lastReportAt: number;
+  /**
+   * The hand number this player looked at their own cards in, or null.
+   *
+   * The only bridge between a body and a hand, and it carries one bit: they
+   * looked. `projection.ts` reads it to decide whether to hand this player their
+   * own cards; nothing else may read it, and nothing at all replicates it to
+   * anyone but its owner.
+   */
+  peekedHand: number | null;
+  /** How many times they lifted their cards in the current hand. */
+  peeksThisHand: number;
+  /**
+   * Total time spent with cards lifted this hand, in milliseconds.
+   *
+   * Nobody is told this. It is here because Phase 6's stress model wants it —
+   * a player who spends nine seconds staring at the same two cards is under a
+   * different kind of pressure than one who glances once.
+   */
+  peekMsThisHand: number;
+  /**
+   * How many times this hand the table has seen them lift their cards far
+   * enough to read. See `LOOK`. The first one is everybody; the rest are what
+   * `RE_CHECKED` is made of.
+   */
+  looksThisHand: number;
+  /** True once the cards have gone back down far enough to count another look. */
+  lookArmed: boolean;
+}
+
+/**
+ * One record per seat that has ever reported.
+ *
+ * An array rather than a map, so match state stays plain JSON that snapshots,
+ * replays and diffs like everything else in `match-state.ts`.
+ */
+export type PresenceState = SeatPresenceRecord[];
+
+export function createPresence(): PresenceState {
+  return [];
+}
+
+function findSeat(presence: PresenceState, seatIndex: number): SeatPresenceRecord | undefined {
+  return presence.find((record) => record.seatIndex === seatIndex);
+}
+
+function blank(seatIndex: number, now: number): SeatPresenceRecord {
+  return {
+    seatIndex,
+    gaze: GAZE_AWAY,
+    peek: 0,
+    lift: 0,
+    lean: 0,
+    handlingChips: false,
+    lastMovedAt: now,
+    lastReportAt: now,
+    peekedHand: null,
+    peeksThisHand: 0,
+    peekMsThisHand: 0,
+    looksThisHand: 0,
+    lookArmed: true,
+  };
+}
+
+export function seatPresence(
+  presence: PresenceState,
+  seatIndex: number,
+  now: number,
+): SeatPresenceRecord {
+  let record = findSeat(presence, seatIndex);
+  if (!record) {
+    record = blank(seatIndex, now);
+    presence.push(record);
+  }
+  return record;
+}
+
+/**
+ * Records what a client says its body is doing.
+ *
+ * Nothing here is trusted in the sense that matters — a client can lie about
+ * where it is looking, exactly as a person can look at your chips out of the
+ * corner of their eye. That is a poker skill, not an exploit. What a client
+ * *cannot* do is stay silent to hide: the seat keeps replicating, and the
+ * stillness clock starts running the moment the reports stop.
+ */
+export function reportPresence(
+  presence: PresenceState,
+  seatIndex: number,
+  input: PresenceInput,
+  now: number,
+): { looked: boolean } {
+  const record = seatPresence(presence, seatIndex, now);
+  const peek = clamp01(input.peek);
+  const lift = clamp01(input.lift);
+  const lean = clamp01(input.lean);
+
+  if (record.peek > 0 && now > record.lastReportAt) {
+    // Time spent lifted, integrated between reports. Phase 6 reads it; nobody
+    // else ever will.
+    record.peekMsThisHand += Math.min(now - record.lastReportAt, 1_000);
+  }
+
+  // Movement too small to see is not movement. Without a floor here, pointer
+  // jitter would keep the stillness clock permanently at zero and nobody would
+  // ever read as unnaturally still.
+  const moved =
+    !gazeEquals(record.gaze, input.gaze) ||
+    Math.abs(record.peek - peek) > VISIBLE_MOVEMENT ||
+    Math.abs(record.lift - lift) > VISIBLE_MOVEMENT ||
+    Math.abs(record.lean - lean) > VISIBLE_MOVEMENT ||
+    record.handlingChips !== input.handlingChips;
+
+  // A look, measured on the curl as it is broadcast rather than as reported:
+  // what counts is what somebody across the table could have seen.
+  const seen = quantisePeek(peek);
+  let looked = false;
+  if (record.lookArmed && seen >= LOOK.at) {
+    record.lookArmed = false;
+    record.looksThisHand++;
+    looked = true;
+  } else if (!record.lookArmed && seen < LOOK.rearmBelow) {
+    record.lookArmed = true;
+  }
+
+  record.gaze = input.gaze;
+  record.peek = peek;
+  record.lift = lift;
+  record.lean = lean;
+  record.handlingChips = input.handlingChips;
+  record.lastReportAt = now;
+  if (moved) record.lastMovedAt = now;
+  return { looked };
+}
+
+/**
+ * Marks a seat as having looked at its own cards this hand.
+ *
+ * Returns true the first time in a given hand, which is what the caller uses to
+ * decide whether a fresh view needs pushing.
+ */
+export function markPeeked(
+  presence: PresenceState,
+  seatIndex: number,
+  handNumber: number,
+  now: number,
+): boolean {
+  const record = seatPresence(presence, seatIndex, now);
+  record.peeksThisHand++;
+  record.lastMovedAt = now;
+  if (record.peekedHand === handNumber) return false;
+  record.peekedHand = handNumber;
+  return true;
+}
+
+export function hasPeeked(
+  presence: PresenceState,
+  seatIndex: number | null,
+  handNumber: number | null,
+): boolean {
+  if (seatIndex === null || handNumber === null) return false;
+  return findSeat(presence, seatIndex)?.peekedHand === handNumber;
+}
+
+/**
+ * Clears the per-hand bookkeeping when a new hand is dealt.
+ *
+ * Bodies persist across hands — a head does not snap back to centre because the
+ * deck was shuffled — but the record of having looked does not, which is what
+ * forces every player to lift their cards again every hand.
+ */
+export function resetForHand(presence: PresenceState, now: number): void {
+  for (const record of presence) {
+    record.peekedHand = null;
+    record.peeksThisHand = 0;
+    record.peekMsThisHand = 0;
+    record.looksThisHand = 0;
+    record.lookArmed = true;
+    record.peek = 0;
+    record.lift = 0;
+    record.lastReportAt = now;
+  }
+}
+
+export function forgetSeat(presence: PresenceState, seatIndex: number): void {
+  const index = presence.findIndex((record) => record.seatIndex === seatIndex);
+  if (index >= 0) presence.splice(index, 1);
+}
+
+export interface PresenceFrameOptions {
+  /**
+   * What each seat is giving away. Supplied rather than computed here, because
+   * stress belongs to `stress.ts` and this module has no business knowing how
+   * frightened anybody is — only how to lay a body out for broadcast.
+   */
+  tellsFor?: (seatIndex: number) => SeatTells;
+  /** Whether each seat is visibly steadying themselves. Supplied for the same reason. */
+  composingFor?: (seatIndex: number) => boolean;
+  /** Seats currently at the table, in seat order. */
+  seatIndices: readonly number[];
+  /** Seats whose player is connected. Everyone else stops moving entirely. */
+  connected: ReadonlySet<number>;
+}
+
+/**
+ * The public frame.
+ *
+ * Every field is something a person in a chair at this table could see. There is
+ * no viewer parameter because there is nothing here to hide from anyone — which
+ * is a property worth keeping, because it is what makes this a cheap broadcast
+ * instead of six projections.
+ */
+/**
+ * The seats' half of a presence frame.
+ *
+ * Deliberately not the whole frame: the Dealer rides the same channel but is
+ * not a seat, and this module has no business knowing about him. `projection.ts`
+ * is the one place the two halves are put together, because it is the one place
+ * allowed to build something a client receives.
+ */
+export type SeatFrame = Pick<PresenceFrame, 'serverTime' | 'seats'>;
+
+export function projectPresence(
+  presence: PresenceState,
+  options: PresenceFrameOptions,
+  now: number,
+): SeatFrame {
+  const seats: SeatPresence[] = options.seatIndices.map((seatIndex) => {
+    const record = findSeat(presence, seatIndex);
+    const present = options.connected.has(seatIndex);
+
+    if (!record) {
+      return {
+        seatIndex,
+        gaze: GAZE_AWAY,
+        peek: 0,
+        lift: 0,
+        lean: 0,
+        handlingChips: false,
+        stillMs: 0,
+        present,
+        tells: options.tellsFor?.(seatIndex) ?? CALM,
+        composing: present && (options.composingFor?.(seatIndex) ?? false),
+      };
+    }
+
+    // A client that stops reporting does not freeze mid-lift. Its cards fall,
+    // its hands come off its chips, and the stillness clock keeps running.
+    // Ordinary gaps between reports are absorbed by the grace window, so a seat
+    // that is behaving normally is replicated at face value.
+    const quiet = Math.max(0, now - record.lastReportAt - PRESENCE.graceMs);
+    const decay = quiet <= 0 ? 1 : Math.max(0, 1 - quiet / PRESENCE.peekDecayMs);
+
+    return {
+      seatIndex,
+      gaze: record.gaze,
+      peek: present ? quantisePeek(record.peek * decay) : 0,
+      lift: present ? quantisePeek(record.lift * decay) : 0,
+      lean: present ? quantisePeek(record.lean * decay) : 0,
+      handlingChips: present && record.handlingChips && decay > 0,
+      stillMs: Math.max(0, now - record.lastMovedAt),
+      present,
+      // An empty chair does not sweat. A disconnected player's body is held and
+      // then decays, but their fear leaves with them.
+      tells: present ? (options.tellsFor?.(seatIndex) ?? CALM) : CALM,
+      composing: present && (options.composingFor?.(seatIndex) ?? false),
+    };
+  });
+
+  return { serverTime: now, seats };
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(value, 0), 1);
+}

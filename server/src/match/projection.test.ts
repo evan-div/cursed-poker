@@ -52,21 +52,35 @@ function auditView(view: ClientView): FoundArray[] {
   return found;
 }
 
+/**
+ * The community cards the table has been shown.
+ *
+ * Not always the whole board: an all-in hand is finished by the engine in one
+ * step and told a street at a time, so for a few seconds the server holds
+ * cards that are dealt and not yet public. They are as secret as the deck.
+ */
+function boardSoFar(match: Match): Card[] {
+  const board = match.state.table?.hand?.board ?? [];
+  return board.slice(0, match.state.runout?.boardShown ?? board.length);
+}
+
 /** Every card this viewer is legitimately entitled to see, right now. */
 function permittedCards(match: Match, playerId: string): Set<Card> {
   const allowed = new Set<Card>();
   const hand = match.state.table?.hand;
 
-  for (const card of hand?.board ?? []) allowed.add(card);
+  for (const card of boardSoFar(match)) allowed.add(card);
 
   const seat = match.state.players.find((p) => p.playerId === playerId)?.seatIndex;
   const own = hand?.seats.find((s) => s.seatIndex === seat)?.holeCards;
   for (const card of own ?? []) allowed.add(card);
 
-  // Showdown reveals are public by the rules of poker.
+  // Showdown reveals are public by the rules of poker. While an all-in hand is
+  // being run out, that is the hands themselves and not yet the five cards
+  // each one makes — those are picked from a board nobody has seen all of.
   for (const reveal of hand?.result?.showdown ?? []) {
     for (const card of reveal.holeCards) allowed.add(card);
-    for (const card of reveal.bestFive) allowed.add(card);
+    if (!match.state.runout) for (const card of reveal.bestFive) allowed.add(card);
   }
   for (const reveal of match.state.lastResult?.showdown ?? []) {
     for (const card of reveal.holeCards) allowed.add(card);
@@ -79,7 +93,7 @@ function assertNoLeak(match: Match, playerId: string | null): void {
   const view = match.viewFor(playerId);
   const allowed = playerId === null ? new Set<Card>() : permittedCards(match, playerId);
   // A spectator may still see the community cards.
-  for (const card of match.state.table?.hand?.board ?? []) allowed.add(card);
+  for (const card of boardSoFar(match)) allowed.add(card);
   if (playerId === null) {
     for (const reveal of match.state.lastResult?.showdown ?? []) {
       for (const card of reveal.holeCards) allowed.add(card);
@@ -87,7 +101,7 @@ function assertNoLeak(match: Match, playerId: string | null): void {
     }
     for (const reveal of match.state.table?.hand?.result?.showdown ?? []) {
       for (const card of reveal.holeCards) allowed.add(card);
-      for (const card of reveal.bestFive) allowed.add(card);
+      if (!match.state.runout) for (const card of reveal.bestFive) allowed.add(card);
     }
   }
 
@@ -170,12 +184,28 @@ function randomAction(match: Match, seatIndex: number, rng: SeededRandomSource):
   return { type: 'CALL' };
 }
 
-/** Plays a whole match, auditing every viewer's view at every decision point. */
+/**
+ * Plays a whole match, auditing every viewer's view at every decision point.
+ *
+ * Some players look at their cards and some never do, so the audit covers both
+ * a view that legitimately carries hole cards and one that carries none.
+ */
 function playAudited(h: Harness, maxSteps = 40_000): number {
   let audits = 0;
   let steps = 0;
+  let peekedHand = -1;
 
   while (h.match.state.status === 'IN_PROGRESS' && steps++ < maxSteps) {
+    const current = h.match.state.table?.hand;
+    if (current && current.handNumber !== peekedHand) {
+      peekedHand = current.handNumber;
+      for (const player of h.match.state.players) {
+        if (h.rng.nextInt(4) === 0) continue; // one in four never looks
+        if (!current.seats.some((s) => s.seatIndex === player.seatIndex)) continue;
+        h.match.peek(player.playerId, current.handNumber);
+      }
+    }
+
     for (const id of [...h.playerIds, null]) {
       assertNoLeak(h.match, id);
       audits++;
@@ -216,6 +246,7 @@ describe('the projection boundary', () => {
   it('shows a player their own hole cards and nobody else any of them', () => {
     const h = startMatch(6, 99);
     const hand = h.match.state.table!.hand!;
+    for (const player of h.match.state.players) h.match.peek(player.playerId, hand.handNumber);
 
     for (const player of h.match.state.players) {
       const view = h.match.viewFor(player.playerId);
@@ -271,7 +302,9 @@ describe('the projection boundary', () => {
       let guard = 0;
       while (h.match.state.status === 'IN_PROGRESS' && guard++ < 400) {
         const hand = h.match.state.table?.hand;
-        if (hand?.result?.showdown && hand.result.showdown.length > 1) {
+        // Once it has been told. During an all-in runout the hands are up but
+        // not yet named — `runout.test.ts` holds that half.
+        if (hand?.result?.showdown && hand.result.showdown.length > 1 && !h.match.state.runout) {
           const reveals = hand.result.showdown;
           for (const player of h.match.state.players) {
             const view = h.match.viewFor(player.playerId);
@@ -297,6 +330,70 @@ describe('the projection boundary', () => {
       h.match.dispose();
     }
     throw new Error('No showdown occurred in 40 matches — the harness is broken');
+  });
+
+  it('withholds a player\'s own cards until they look at them', () => {
+    const h = startMatch(5, 4242);
+    const hand = h.match.state.table!.hand!;
+
+    // Dealt, but not looked at: the client has nothing to render and nothing
+    // a modified build could render early.
+    for (const player of h.match.state.players) {
+      const view = h.match.viewFor(player.playerId);
+      expect(view.you.holeCards).toBeNull();
+      expect(view.you.hasPeeked).toBe(false);
+    }
+
+    h.match.peek('p2', hand.handNumber);
+    const looked = h.match.viewFor('p2');
+    expect(looked.you.hasPeeked).toBe(true);
+    expect(looked.you.holeCards).toHaveLength(2);
+
+    // Looking is private to the looker. Nobody else's view changed.
+    expect(h.match.viewFor('p1').you.holeCards).toBeNull();
+
+    // And it survives a drop: a player who has already seen their cards does
+    // not have to earn them again by reconnecting.
+    h.match.setConnected('p2', false);
+    h.match.setConnected('p2', true);
+    expect(h.match.viewFor('p2').you.holeCards).toEqual(looked.you.holeCards);
+
+    h.match.dispose();
+  });
+
+  it('makes every player look again when the next hand is dealt', () => {
+    const h = startMatch(4, 77);
+    const first = h.match.state.table!.hand!.handNumber;
+    for (const player of h.match.state.players) h.match.peek(player.playerId, first);
+    expect(h.match.viewFor('p0').you.holeCards).toHaveLength(2);
+
+    // Fold the hand out and let the next one be dealt.
+    let guard = 0;
+    while (h.match.state.status === 'IN_PROGRESS' && guard++ < 200) {
+      const hand = h.match.state.table?.hand;
+      if (hand && hand.handNumber !== first) break;
+      if (hand && hand.actingSeat !== null) {
+        const player = h.match.state.players.find((p) => p.seatIndex === hand.actingSeat)!;
+        h.match.submitAction(player.playerId, hand.handNumber, { type: 'FOLD' });
+      } else {
+        h.clock.advance(100);
+      }
+    }
+
+    expect(h.match.state.table!.hand!.handNumber).not.toBe(first);
+    for (const player of h.match.state.players) {
+      expect(h.match.viewFor(player.playerId).you.holeCards).toBeNull();
+    }
+    h.match.dispose();
+  });
+
+  it('refuses a peek at a hand that is not the one being played', () => {
+    const h = startMatch(4, 5);
+    const hand = h.match.state.table!.hand!;
+    expect(() => h.match.peek('p0', hand.handNumber + 1)).toThrow(/ended/);
+    expect(() => h.match.peek('nobody', hand.handNumber)).toThrow(/not in this match/);
+    expect(h.match.viewFor('p0').you.holeCards).toBeNull();
+    h.match.dispose();
   });
 
   it('gives an unknown viewer nothing but public state', () => {

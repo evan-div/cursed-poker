@@ -14,6 +14,8 @@
 import type { Card } from './cards.js';
 import type { HandResult } from './hand-events.js';
 import type { HandCategory, HandPhase, LegalActions } from './poker-types.js';
+import type { SelfStress } from './stress.js';
+import type { ComposureView } from './composure.js';
 
 export const MATCH_STATUSES = ['LOBBY', 'IN_PROGRESS', 'FINISHED'] as const;
 export type MatchStatus = (typeof MATCH_STATUSES)[number];
@@ -68,6 +70,15 @@ export interface HandView {
   actingSeat: number | null;
   /** Epoch milliseconds by which the acting seat must act, or null. */
   actionDeadline: number | null;
+  /**
+   * True while an all-in hand is being run out a street at a time.
+   *
+   * Nobody left in the hand can bet, so their cards are face up
+   * (`revealedCards`) and the board is still arriving. Everything in the view is
+   * the table *as it stands*: the board so far, the stacks before anybody is
+   * paid, and no word yet on what any hand is worth.
+   */
+  allInRunout: boolean;
   seats: SeatView[];
 }
 
@@ -75,9 +86,41 @@ export interface HandView {
 export interface SelfView {
   playerId: string;
   seatIndex: number | null;
+  /**
+   * The viewer's own two cards — **once they have looked at them**.
+   *
+   * Null until this player peeks in this hand, and null again the moment the
+   * next one is dealt. Cards are not pushed at the deal, because a client that
+   * is handed its cards for free can render them for a whole hand without ever
+   * moving, and then peeking is decoration: an animation a modified client
+   * would simply skip.
+   *
+   * Making the look load-bearing costs one gesture a hand and buys the thing the
+   * game is about — every player must physically lift their cards at least once,
+   * in front of everybody, and every lift after that is a decision somebody
+   * might be watching.
+   */
   holeCards: Card[] | null;
+  /** Whether this player has looked at their cards in the current hand. */
+  hasPeeked: boolean;
   /** Null unless it is this player's turn. */
   legalActions: LegalActions | null;
+  /**
+   * Your own heart, in beats per minute, and the scalar behind it.
+   *
+   * The only place in the protocol a real stress number appears, and it goes to
+   * exactly one person. You are told because you can feel it; nobody else is,
+   * because they cannot. What the rest of the table gets is `SeatTells` on the
+   * presence frame — shaking and breathing and sweat, quantised, which is what
+   * a person across a table actually has to work with.
+   */
+  stress: SelfStress;
+  /**
+   * Your own composure: the challenge you are in the middle of, how the last
+   * one went, and when you may try again. Owner-only, like your heart — the
+   * table learns how it went from your tells, and only from your tells.
+   */
+  composure: ComposureView;
 }
 
 export interface LevelView {

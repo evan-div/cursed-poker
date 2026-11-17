@@ -10,7 +10,7 @@
     "socket.io": "^4.8.1"
   },
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch --clear-screen=false --exclude \"../node_modules/**\" --exclude \"**/node_modules/**\" src/main.ts",
     "start": "tsx src/main.ts"
   }
 }

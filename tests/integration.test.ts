@@ -3,7 +3,16 @@ import type { AddressInfo } from 'node:net';
 import { Server as SocketIoServer } from 'socket.io';
 import { io as ioClient, type Socket as ClientSocket } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { BlindStructure, Card, ClientView, PlayerAction } from '@cursed/shared';
+import type {
+  BlindStructure,
+  Card,
+  ClientView,
+  PlayerAction,
+  PresenceFrame,
+  SelfFrame,
+} from '@cursed/shared';
+import { STRESS } from '@cursed/shared';
+import { applyStressEvent } from '../server/src/match/stress.js';
 import { GameServer } from '../server/src/net/game-server.js';
 import { SocketIoTransport } from '../server/src/net/socketio-transport.js';
 
@@ -33,6 +42,9 @@ interface TestClient {
   latest: ClientView | null;
   /** Own hole cards per hand number, for the cross-client privacy audit. */
   holeByHand: Map<number, Card[]>;
+  presence: PresenceFrame[];
+  /** Frames on the owner-only `self` channel: this client's own heart. */
+  self: SelfFrame[];
   acting: boolean;
 }
 
@@ -69,6 +81,8 @@ async function connect(name: string): Promise<TestClient> {
     views: [],
     latest: null,
     holeByHand: new Map(),
+    presence: [],
+    self: [],
     acting: false,
   };
 
@@ -80,8 +94,32 @@ async function connect(name: string): Promise<TestClient> {
     }
   });
 
+  socket.on('presence', (frame: PresenceFrame) => client.presence.push(frame));
+  socket.on('self', (frame: SelfFrame) => client.self.push(frame));
+
   clients.push(client);
   return client;
+}
+
+/**
+ * Looks at its cards the moment a hand is dealt.
+ *
+ * Every client has to: cards are not pushed at the deal, they arrive when a
+ * player lifts them. A bot that never peeked would play the whole match blind,
+ * which is legal but would make the privacy audit below vacuous.
+ */
+function peeksAtEveryHand(client: TestClient): void {
+  let looked = -1;
+  client.socket.on('view', async (view: ClientView) => {
+    if (!view.hand || view.hand.handNumber === looked || view.you.seatIndex === null) return;
+    if (!view.hand.seats.some((s) => s.seatIndex === view.you.seatIndex && s.inHand)) return;
+    looked = view.hand.handNumber;
+    try {
+      await emit(client.socket, 'poker:peek', { handNumber: view.hand.handNumber });
+    } catch {
+      // The hand ended while we were reaching for the cards. Fine.
+    }
+  });
 }
 
 /** A bot that shoves whenever it can, so matches end quickly. */
@@ -179,7 +217,22 @@ describe('lobby over the wire', () => {
       const view = client.latest!;
       expect(view.players).toHaveLength(6);
       expect(view.hand!.seats).toHaveLength(6);
-      expect(view.you.holeCards).toHaveLength(2);
+      // Dealt, but nobody has lifted anything yet.
+      expect(view.you.holeCards).toBeNull();
+      expect(view.you.hasPeeked).toBe(false);
+    }
+
+    // Looking is what puts the cards in your hand, and only in yours.
+    const looker = group[2]!;
+    const handNumber = looker.latest!.hand!.handNumber;
+    expect((await emit(looker.socket, 'poker:peek', { handNumber })).ok).toBe(true);
+    await waitFor(() => looker.latest!.you.holeCards !== null, 5_000, 'the cards to arrive');
+
+    expect(looker.latest!.you.holeCards).toHaveLength(2);
+    expect(looker.latest!.you.hasPeeked).toBe(true);
+    for (const other of group) {
+      if (other === looker) continue;
+      expect(other.latest!.you.holeCards).toBeNull();
     }
   });
 
@@ -219,7 +272,10 @@ describe('lobby over the wire', () => {
 describe('a whole match over the wire', () => {
   it('plays six players down to one winner', async () => {
     const group = await openLobby(6);
-    for (const client of group) playAggressively(client);
+    for (const client of group) {
+      peeksAtEveryHand(client);
+      playAggressively(client);
+    }
     await emit(group[0]!.socket, 'lobby:start', {});
 
     await waitFor(
@@ -238,7 +294,10 @@ describe('a whole match over the wire', () => {
 
   it('never sends a client another player\'s live hole cards', async () => {
     const group = await openLobby(5);
-    for (const client of group) playAggressively(client);
+    for (const client of group) {
+      peeksAtEveryHand(client);
+      playAggressively(client);
+    }
     await emit(group[0]!.socket, 'lobby:start', {});
     await waitFor(
       () => group.every((c) => c.latest?.room.status === 'FINISHED'),
@@ -288,6 +347,222 @@ describe('a whole match over the wire', () => {
   }, 40_000);
 });
 
+describe('bodies over the wire', () => {
+  it('broadcasts what everyone is doing, and nothing else', async () => {
+    const group = await openLobby(4);
+    await emit(group[0]!.socket, 'lobby:start', {});
+    await waitFor(() => group.every((c) => c.latest?.hand !== null), 5_000, 'the first hand');
+
+    const watcher = group[0]!;
+    const mover = group[2]!;
+    const moverSeat = mover.latest!.you.seatIndex!;
+
+    expect(
+      (
+        await emit(mover.socket, 'player:presence', {
+          gaze: { kind: 'SEAT', seatIndex: 0 },
+          peek: 0.5,
+          lift: 0,
+          lean: 0,
+          handlingChips: true,
+        })
+      ).ok,
+    ).toBe(true);
+
+    await waitFor(
+      () =>
+        watcher.presence.some((f) => {
+          const seat = f.seats.find((s) => s.seatIndex === moverSeat);
+          return seat?.peek === 0.5 && seat.handlingChips;
+        }),
+      5_000,
+      'the table to see them lift their cards',
+    );
+
+    // The frame is body state only. A card could not hide in it, because
+    // there is nowhere in the shape for one to be.
+    //
+    // This list is an allowlist rather than a denylist on purpose: adding a
+    // field to the presence protocol has to be a deliberate act that fails this
+    // test first and gets argued for here. The Dealer's half was added in
+    // Phase 5 and is held to exactly the same standard — he is a body, he has a
+    // posture and something he is looking at, and there is no room in his shape
+    // for a card either.
+    const allowed = new Set([
+      'serverTime',
+      'seats',
+      'seatIndex',
+      'gaze',
+      'kind',
+      'peek',
+      'lift',
+      'lean',
+      'handlingChips',
+      'stillMs',
+      'present',
+      // The Dealer, and the room he keeps.
+      'dealer',
+      'posture',
+      'twitchAt',
+      'dread',
+      // Phase 6's tells: what a seat is giving away. A shake, a breath, and a
+      // word for how wet somebody's face is — never a heart rate, never a
+      // stress number, and never anything derived from a card.
+      'tells',
+      'tremor',
+      'breathing',
+      'sweat',
+      // Phase 7: that somebody is steadying themselves, as one bit — never
+      // the challenge, its rhythm, its progress or how it went.
+      'composing',
+    ]);
+    let leaves = 0;
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (node && typeof node === 'object') {
+        for (const [key, value] of Object.entries(node)) {
+          expect(allowed, `unexpected field "${key}" in a presence frame`).toContain(key);
+          leaves++;
+          walk(value);
+        }
+      }
+    };
+    for (const frame of watcher.presence) walk(frame);
+    expect(leaves).toBeGreaterThan(20);
+
+    // And it says the same thing to everybody: presence has no hidden half.
+    const seen = group.map((c) => c.presence.length);
+    expect(seen.every((count) => count > 0)).toBe(true);
+  }, 20_000);
+
+  it('tells each player their own heart, and nobody else’s', async () => {
+    const group = await openLobby(4);
+    await emit(group[0]!.socket, 'lobby:start', {});
+    await waitFor(() => group.every((c) => c.latest?.hand !== null), 5_000, 'the first hand');
+
+    // Frighten one player, hard, straight through the model.
+    const frightened = group[2]!;
+    const seat = frightened.latest!.you.seatIndex!;
+    const room = gameServer.rooms.get(frightened.latest!.room.code)!;
+    for (let i = 0; i < 12; i++) {
+      applyStressEvent(room.match.state.stress, seat, 'SHOVED', Date.now());
+    }
+    for (const c of group) c.self.length = 0;
+
+    await waitFor(
+      () => group.every((c) => c.self.length > 0),
+      5_000,
+      'everybody to hear from their own heart',
+    );
+
+    // The frightened player feels it. Everybody else, on the same tick, does
+    // not — the channel is addressed by player, and the number never leaves.
+    const latest = (c: (typeof group)[number]) => c.self[c.self.length - 1]!.stress.heartRate;
+    expect(latest(frightened)).toBeGreaterThan(STRESS.maxBpm - 10);
+    for (const other of group.filter((c) => c !== frightened)) {
+      expect(latest(other), other.name).toBeLessThan(latest(frightened) - 20);
+    }
+
+    // The frame is exactly a time and a heart. No seat and no player id: it
+    // is addressed by the socket it arrives on, so there is nothing to put in
+    // it that could be mis-sent somewhere else and still make sense.
+    for (const frame of frightened.self) {
+      expect(Object.keys(frame).sort()).toEqual(['serverTime', 'stress']);
+      expect(Object.keys(frame.stress).sort()).toEqual(['heartRate', 'stress']);
+    }
+  }, 20_000);
+
+  it('will not let a body report use up the budget for a poker action', async () => {
+    const group = await openLobby(4);
+    const spammer = group[1]!;
+
+    // Far more presence than the client would ever send.
+    const flood = await Promise.all(
+      Array.from({ length: 80 }, () =>
+        emit(spammer.socket, 'player:presence', {
+          gaze: { kind: 'AWAY' },
+          peek: 0,
+          lift: 0,
+          lean: 0,
+          handlingChips: false,
+        }).catch(() => ({ ok: false, code: 'TIMEOUT' })),
+      ),
+    );
+    // The flood is capped...
+    expect(flood.some((r: any) => r.ok === false && r.code === 'RATE_LIMITED')).toBe(true);
+    // ...and the player can still speak about poker afterwards.
+    expect((await emit(spammer.socket, 'lobby:ready', { ready: true })).ok).toBe(true);
+  }, 20_000);
+
+  it('refuses a malformed body report', async () => {
+    const group = await openLobby(4);
+    for (const payload of [
+      { gaze: { kind: 'SEAT', seatIndex: 99 }, peek: 0, lift: 0, lean: 0, handlingChips: false },
+      { gaze: { kind: 'NOWHERE' }, peek: 0, lift: 0, lean: 0, handlingChips: false },
+      { gaze: { kind: 'AWAY' }, peek: 4, lift: 0, lean: 0, handlingChips: false },
+      { gaze: { kind: 'AWAY' }, peek: 0, lift: 0, lean: 2, handlingChips: false },
+      { gaze: { kind: 'AWAY' }, peek: 0, lift: 4, lean: 0, handlingChips: false },
+      { gaze: { kind: 'AWAY' }, peek: 0, lift: 0, lean: 0 },
+    ]) {
+      expect(await emit(group[0]!.socket, 'player:presence', payload)).toMatchObject({
+        ok: false,
+        code: 'BAD_REQUEST',
+      });
+    }
+  }, 20_000);
+});
+
+describe('composure over the wire', () => {
+  it('tells only the player steadying themselves, and takes no client\'s word for how it went', async () => {
+    const group = await openLobby(4);
+    await emit(group[0]!.socket, 'lobby:start', {});
+    await waitFor(() => group.every((c) => c.latest?.hand !== null), 5_000, 'the first hand');
+    await new Promise((r) => setTimeout(r, 200));
+
+    const me = group[1]!;
+    const others = group.filter((c) => c !== me);
+    const before = others.map((c) => c.views.length);
+
+    expect((await emit(me.socket, 'composure:begin', {})).ok).toBe(true);
+    await waitFor(() => me.latest?.you.composure.challenge !== null, 2_000, 'the challenge');
+    const challenge = me.latest!.you.composure.challenge!;
+    expect(['BREATH', 'HOLD']).toContain(challenge.kind);
+
+    // Nobody else's view so much as refreshed: the challenge is not theirs to
+    // know about.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(others.map((c) => c.views.length)).toEqual(before);
+    for (const other of others) expect(JSON.stringify(other.latest)).not.toContain(challenge.id);
+
+    // But everybody can see them doing it — as one bit on the body broadcast,
+    // and nothing about the challenge riding along with it.
+    const mySeat = me.latest!.you.seatIndex!;
+    for (const other of others) {
+      await waitFor(
+        () => other.presence.at(-1)?.seats.find((s) => s.seatIndex === mySeat)?.composing === true,
+        2_000,
+        `${other.name} to see them steadying themselves`,
+      );
+      expect(JSON.stringify(other.presence.at(-1))).not.toContain(challenge.id);
+    }
+
+    // A client that announces its own success is ignored: the extra fields are
+    // stripped at the schema, and one key press finishes nothing.
+    const claim = { challengeId: challenge.id, input: 'DOWN', outcome: 'STEADIED', quality: 1, at: 0 };
+    expect((await emit(me.socket, 'composure:input', claim)).ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(me.latest!.you.composure.challenge?.id).toBe(challenge.id);
+    expect(me.latest!.you.composure.result).toBeNull();
+
+    // And nonsense is refused at the door.
+    expect(await emit(me.socket, 'composure:input', { challengeId: challenge.id, input: 'WIN' })).toMatchObject({
+      ok: false,
+      code: 'BAD_REQUEST',
+    });
+    expect(await emit(me.socket, 'composure:begin', {})).toMatchObject({ ok: false, code: 'NOT_READY' });
+  }, 20_000);
+});
+
 describe('reconnecting over the wire', () => {
   it('restores the same seat and the same hole cards after a drop', async () => {
     const group = await openLobby(4);
@@ -295,6 +570,9 @@ describe('reconnecting over the wire', () => {
     await waitFor(() => group.every((c) => c.latest?.hand !== null), 5_000, 'the first hand');
 
     const victim = group[3]!;
+    await emit(victim.socket, 'poker:peek', { handNumber: victim.latest!.hand!.handNumber });
+    await waitFor(() => victim.latest!.you.holeCards !== null, 5_000, 'the cards to arrive');
+
     const before = victim.latest!;
     const seatBefore = before.you.seatIndex;
     const cardsBefore = before.you.holeCards;

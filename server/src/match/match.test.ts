@@ -226,6 +226,8 @@ describe('the action clock', () => {
 describe('reconnecting', () => {
   it('restores the same seat and the same hole cards', () => {
     const h = readyAndStart(makeMatch({ players: 5 }));
+    // Cards arrive when a player looks at them, so this one looks first.
+    h.match.peek('p3', h.match.state.table!.hand!.handNumber);
     const before = h.match.viewFor('p3');
     expect(before.you.holeCards).toHaveLength(2);
 

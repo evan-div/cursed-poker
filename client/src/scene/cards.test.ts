@@ -21,7 +21,7 @@ const seat = (overrides: Partial<SeatView> = {}): SeatView => ({
 
 const view = (overrides: Partial<ClientView['you']> = {}): ClientView =>
   ({
-    you: { playerId: 'me', seatIndex: 1, holeCards: null, legalActions: null, ...overrides },
+    you: { playerId: 'me', seatIndex: 1, holeCards: null, hasPeeked: false, legalActions: null, ...overrides },
   }) as ClientView;
 
 describe('which faces the table may show', () => {
@@ -91,3 +91,5 @@ describe('reading text off the table', () => {
     }
   });
 });
+
+

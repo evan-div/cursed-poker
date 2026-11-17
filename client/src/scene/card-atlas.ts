@@ -15,8 +15,15 @@ import { RANK_COUNT, SUIT_COUNT, rankOf, suitOf, type Card } from '@cursed/share
 export const ATLAS_COLUMNS = RANK_COUNT;
 export const ATLAS_ROWS = SUIT_COUNT + 1;
 
-/** Cell size in pixels. The ratio matches a real card (63.5mm x 88.9mm). */
-export const CELL = { width: 160, height: 224 } as const;
+/**
+ * One card's worth of canvas, in pixels. The ratio matches a real card
+ * (63.5mm x 88.9mm).
+ *
+ * Big enough that a card held up to the camera is still print rather than
+ * blur: a lifted pair fills a fifth of the screen, and at the old 160 pixels
+ * across that was two source pixels stretched over every three on screen.
+ */
+export const CELL = { width: 224, height: 314 } as const;
 
 export interface AtlasCell {
   column: number;

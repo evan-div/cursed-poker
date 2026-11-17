@@ -8,13 +8,48 @@ import {
   Vector3,
   WebGLRenderer,
 } from 'three';
-import type { ClientView } from '@cursed/shared';
-import { buildRoom } from './table.js';
+import type {
+  ClientView,
+  GazeTarget,
+  MatchEvent,
+  PresenceFrame,
+  SeatTells,
+  SelfFrame,
+} from '@cursed/shared';
+import { buildRoom, type Room } from './table.js';
+import { dressMaterials } from './materials.js';
+import { createLens, type Lens } from './post.js';
+import { Governor, pinnedDetail, type Detail } from './quality.js';
+import { cuesFor, dealerRiseCue } from '../audio/cues.js';
+import { SILENT_ROOM, startRoomAudio, type RoomAudio } from '../audio/engine.js';
 import { SeatedCamera } from './seated-camera.js';
 import { Avatar } from './avatar.js';
 import { Dealer, buildTrophyTray } from './dealer.js';
 import { CardRenderer } from './cards.js';
 import { ChipRenderer } from './chips.js';
+import { ATTENTION_WEIGHT } from './attention.js';
+import { gazePoint } from './gaze.js';
+import { CardPeekController } from '../interaction/card-peek-controller.js';
+import { Pulse, type Felt } from '../feel/pulse.js';
+import { TableTells } from './tells.js';
+import { POT_POSITION, RADIUS, seatPoint } from './layout.js';
+
+/** Everything the scene needs to report outward. Wired up in `main.ts`. */
+export interface GameSceneHooks {
+  /** The player started lifting their cards: ask the server for them. */
+  onFirstLook: () => void;
+  /** Their curl or raise changed, for reporting to the table. */
+  onExposure: (exposure: number, lift: number) => void;
+  /** They are now looking at something different. */
+  onGaze: (target: GazeTarget) => void;
+}
+
+/** Seats with a player in them, for a view with no hand in progress. */
+function occupiedSeats(view: ClientView): number[] {
+  return view.players
+    .filter((player) => player.seatIndex !== null && player.seated)
+    .map((player) => player.seatIndex!);
+}
 
 /**
  * The 3D table.
@@ -28,6 +63,11 @@ import { ChipRenderer } from './chips.js';
  * It also never renders a card it was not given. Face-down cards are drawn from
  * the same geometry with the back texture; there is no code path that turns an
  * unknown card into a known one, because there is no unknown card to turn.
+ *
+ * Phase 4 added a second input to that function: the presence frame, which says
+ * what everybody's *body* is doing. It is applied the same way — straight onto
+ * the scene, derived from nothing — and it is what makes the table a room full
+ * of people rather than a board with names on it.
  */
 export class GameScene {
   readonly scene = new Scene();
@@ -35,7 +75,10 @@ export class GameScene {
   readonly seated: SeatedCamera;
 
   /** Called once per rendered frame, after the camera has settled. */
-  onFrame: (() => void) | null = null;
+  onFrame: ((deltaSeconds: number) => void) | null = null;
+
+  /** Lifting your own cards. Owned here because the frame loop drives it. */
+  readonly peek: CardPeekController;
 
   #canvas: HTMLCanvasElement;
   #running = false;
@@ -43,32 +86,95 @@ export class GameScene {
   #seatIndex: number | null | undefined;
   #resizeObserver: ResizeObserver | null = null;
 
-  #free: { x: number; y: number; z: number } | null = null;
+  #free: { x: number; y: number; z: number; at: [number, number, number] } | null = null;
   #avatars = new Map<number, Avatar>();
+  #actingSeat: number | null | undefined;
+  #handNumber: number | null = null;
+  #lastPresence: PresenceFrame | null = null;
   #dealer = new Dealer();
+  #room!: Room;
+  #audio: RoomAudio = SILENT_ROOM;
+  /** The blind a chip sound is measured against. See `cues.ts`. */
+  #bigBlind = 0;
+  /** His last posture, so standing up can be heard once rather than every tick. */
+  #dealerPosture: PresenceFrame['dealer']['posture'] = 'STILL';
   #cards = new CardRenderer();
   #chips = new ChipRenderer();
+  /** Everybody's tells, eased and animated. The avatars and the cards share it. */
+  #tells = new TableTells();
+  /** Your own body, felt from the inside. See `feel/pulse.ts`. */
+  #pulse = new Pulse({ reducedMotion: prefersReducedMotion() });
+  #motionQuery: MediaQueryList | null = null;
+  /** The lens the room is drawn through, on machines that can afford one. */
+  #lens: Lens | null = null;
+  #detail: Detail = 'high';
+  /** Watches frame times and steps the room down once if they are too long. */
+  #governor: Governor | null = null;
+  /** The room's dread as last broadcast, or as pinned by a development hook. */
+  #dread = 0;
+  #forcedDread: number | null = null;
+  #onMotionChange = (event: MediaQueryListEvent) => {
+    this.#pulse.reducedMotion = event.matches;
+  };
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, hooks: GameSceneHooks) {
     this.#canvas = canvas;
+    this.peek = new CardPeekController({
+      onFirstLook: hooks.onFirstLook,
+      onExposure: (exposure, lift) => {
+        hooks.onExposure(exposure, lift);
+        this.#cards.setLocalPeek(this.#seatIndex ?? null, exposure, lift);
+        // Peering at a card you are holding up brings a little light with it —
+        // your own, not the room's, and it reaches about as far as your hands.
+        this.#room.setPeering(Math.max(exposure, lift));
+        // Their own hands, without waiting for the round trip: a player watching
+        // their own arm lag their own mouse is the one case latency is unfair.
+        const seat = this.#seatIndex;
+        const own = seat === null || seat === undefined ? undefined : this.#avatars.get(seat);
+        own?.setPeek(exposure, lift);
+        // Curling a card brings your head down to it, which is most of how a
+        // corner index becomes readable across half a metre of dark table.
+        // Picking the cards up does the opposite — they come to you — so the
+        // lean backs off as they rise.
+        this.seated.setPeekLean(exposure * (1 - lift));
+      },
+    });
 
     this.renderer = new WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    // Capped: a 3x retina display would otherwise quadruple the pixel cost for
-    // a scene whose whole point is that most of it is dark.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.95;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
+    // Counted per frame rather than per draw, so a frame drawn in several
+    // passes reports all of them. See `stats`.
+    this.renderer.info.autoReset = false;
 
     this.scene.background = new Color(0x070605);
-    buildRoom(this.scene);
+    // Surfaces are painted once, here, where there is a canvas to paint on.
+    // Surfaces are painted in the background, starting when the page loads —
+    // see `dressMaterials`. This is for the case where nothing started it.
+    void dressMaterials();
+    this.#room = buildRoom(this.scene);
     this.scene.add(this.#dealer.group, buildTrophyTray(), this.#cards.group, this.#chips.group);
 
     this.seated = new SeatedCamera(this.#aspect());
+    // The reading light rides the camera, because it is the player's own eyes
+    // rather than anything in the room. See `READING_LIGHT` in `table.ts`.
+    this.#room.attachTo(this.seated.camera);
     this.seated.sitAt(null);
+    this.seated.onGazeChanged = hooks.onGaze;
+    // Lifting a card and turning your head are the same physical movement, so
+    // the peek takes the pointer while it is held and the camera stays put.
+    this.seated.pointerIsConsumed = () => this.peek.holding;
+    this.seated.onPointerConsumed = (dx, dy) => this.peek.pointerMoved(dx, dy);
     this.seated.attach(canvas);
+    this.peek.attach(canvas);
+
+    // A player who has asked their OS for less motion keeps the sound and the
+    // closing edges, and loses the shake. Followed live, not read once.
+    this.#motionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
+    this.#motionQuery?.addEventListener?.('change', this.#onMotionChange);
 
     // Exposed so the performance budget can be read from a real browser.
     (window as unknown as { __sceneStats?: () => unknown }).__sceneStats = () => this.stats();
@@ -95,15 +201,98 @@ export class GameScene {
         return rows;
       };
 
+      // What this client believes everyone's body is doing. The scene is dark
+      // and people block their own cards, so replication is far easier to check
+      // as numbers than as a screenshot — and this is the only honest way to
+      // ask "did the table actually see that?" from the outside.
+      (window as unknown as { __bodies?: unknown }).__bodies = () => ({
+        frameAgeMs: this.#lastPresence ? Date.now() - this.#lastPresence.serverTime : null,
+        me: {
+          seat: this.#seatIndex ?? null,
+          peek: this.peek.exposure,
+          lift: this.peek.lift,
+          lean: this.seated.lean,
+          gaze: this.seated.gaze,
+        },
+        table: (this.#lastPresence?.seats ?? []).map((seat) => ({
+          seat: seat.seatIndex,
+          peek: seat.peek,
+          lift: seat.lift,
+          lean: seat.lean,
+          gaze: seat.gaze,
+          stillMs: seat.stillMs,
+          present: seat.present,
+          tells: seat.tells,
+          composing: seat.composing,
+        })),
+      });
+
+      // Pins a seat's tells for a screenshot: `__tells(2, { tremor: 1,
+      // breathing: 1, sweat: 'SOAKED' })`, `__tells(2, null)` to let go, and
+      // `__tells(2)` to read what that seat is showing right now.
+      (window as unknown as { __tells?: unknown }).__tells = (
+        seat: number,
+        tells?: SeatTells | null,
+      ) => {
+        if (tells !== undefined) this.#tells.force(seat, tells);
+        const m = this.#tells.motion(seat);
+        return { tremor: m.tremor, breathing: m.breathing, sweat: m.sweat };
+      };
+
+      // Whether the room is actually making a noise. Web Audio cannot run
+      // under a test, so this is how `scripts/audio-check.mjs` finds out.
+      (window as unknown as { __audio?: unknown }).__audio = () => ({
+        running: this.#audio.running,
+      });
+
+      // Your own body, read and forced. `__feel(0.9)` shows what panic looks
+      // like without spending a match getting there; `__feel(null)` hands it
+      // back to the server; `__feel()` just reads it.
+      (window as unknown as { __feel?: unknown }).__feel = (stress?: number | null) => {
+        if (stress !== undefined) this.#pulse.force(stress);
+        return { ...this.#pulse.felt, reported: this.#pulse.reported, gaze: this.seated.gaze };
+      };
+
+      // Pins the room's dread, for looking at the end of the evening without
+      // playing one: `__dread(0.9)`, and `__dread(null)` to hand it back.
+      (window as unknown as { __dread?: unknown }).__dread = (level?: number | null) => {
+        if (level !== undefined) {
+          this.#forcedDread = level;
+          if (level !== null) {
+            this.#dread = level;
+            this.#room.setDread(level);
+            this.#audio.setDread(level);
+          }
+        }
+        return this.#dread;
+      };
+
+      // Reads or sets the quality tier: `__quality('low')`.
+      (window as unknown as { __quality?: unknown }).__quality = (detail?: Detail) => {
+        if (detail === 'high' || detail === 'low') this.setDetail(detail);
+        return this.#detail;
+      };
+
       (window as unknown as { __freeLook?: unknown }).__freeLook = (
         x: number,
         y: number,
         z: number,
+        at?: [number, number, number],
       ) => {
         this.seated.detach();
-        this.#free = { x, y, z };
+        // Aims at the middle of the table unless told otherwise. Anything worth
+        // inspecting up close — a hand on a card — is not in the middle of the
+        // table, and a camera that can only ever look there can only ever
+        // photograph it from behind.
+        this.#free = { x, y, z, at: at ?? [0, 0.8, 0] };
       };
     }
+
+    // A tier somebody asked for by name is kept; otherwise start at the top and
+    // let the governor find out whether this machine agrees.
+    const pinned = pinnedDetail();
+    this.#governor = pinned ? null : new Governor();
+    this.setDetail(pinned ?? 'high');
 
     this.#resize();
     this.#resizeObserver = new ResizeObserver(() => this.#resize());
@@ -118,13 +307,162 @@ export class GameScene {
    * with the same view leaves the table identical.
    */
   apply(view: ClientView): void {
+    this.#bigBlind = view.level?.bigBlind ?? this.#bigBlind;
+    this.#pulse.setStress(view.you.stress, view.serverTime);
     if (this.#seatIndex !== view.you.seatIndex) {
       this.#seatIndex = view.you.seatIndex;
       this.seated.sitAt(view.you.seatIndex);
     }
+
+    const seats = (view.hand?.seats ?? []).map((seat) => seat.seatIndex);
+    this.seated.setSeats(seats.length > 0 ? seats : occupiedSeats(view));
+
+    // A new hand: the cards go back down and everybody has to look again.
+    const handNumber = view.hand?.handNumber ?? null;
+    if (handNumber !== this.#handNumber) {
+      this.#handNumber = handNumber;
+      this.peek.reset();
+      this.#cards.setLocalPeek(this.#seatIndex ?? null, 0, 0);
+    }
+
     this.#applyAvatars(view);
     this.#cards.apply(view);
     this.#chips.apply(view);
+    this.#biasAttention(view);
+  }
+
+  /**
+   * Your own heart, on its private tick.
+   *
+   * The same reading also rides every view; whichever is newer wins, so the two
+   * channels can arrive in any order without the heart stepping backwards.
+   */
+  applySelf(frame: SelfFrame): void {
+    this.#pulse.setStress(frame.stress, frame.serverTime);
+  }
+
+  /** What the player's body is doing to them this frame. */
+  get felt(): Felt {
+    return this.#pulse.felt;
+  }
+
+  /** Everybody else's bodies, straight from the server's broadcast. */
+  applyPresence(frame: PresenceFrame): void {
+    this.#lastPresence = frame;
+    this.#cards.applyPresence(frame);
+    // Every seat, the local one included: your own hands shake on your screen
+    // exactly as they shake on everybody else's, from the same broadcast.
+    this.#tells.applyPresence(frame);
+    // Steadying yourself is visible on every body, yours included — your own
+    // hands and shoulders do it on your screen exactly as on everybody else's.
+    for (const seat of frame.seats) this.#avatars.get(seat.seatIndex)?.setComposing(seat.composing);
+    // The Dealer is a body on this channel too, and nothing about him is
+    // decided here — see `dealer.ts`. The room's dread rides along with him
+    // because lighting that differed between two players would make them
+    // disagree about what they had just watched.
+    this.#dread = this.#forcedDread ?? frame.dread;
+    this.#dealer.apply(frame.dealer, this.#dread, frame.serverTime);
+    this.#room.setDread(this.#dread);
+    this.#audio.setDread(this.#dread);
+
+    // Standing is the one thing he does that has a sound, and it is heard once
+    // — on the tick the posture changes, not on every tick he spends upright.
+    if (frame.dealer.posture !== this.#dealerPosture) {
+      if (frame.dealer.posture === 'RISEN') this.#audio.play(dealerRiseCue());
+      this.#dealerPosture = frame.dealer.posture;
+    }
+    for (const seat of frame.seats) {
+      const avatar = this.#avatars.get(seat.seatIndex);
+      if (!avatar) continue;
+      // The local player's own body is driven by their own input, not by an
+      // echo of it arriving 80ms later — except their hands, which they can see
+      // and which have to agree with the cards they are holding.
+      if (seat.seatIndex === this.#seatIndex) continue;
+      avatar.setGaze(seat.gaze);
+      avatar.setPeek(seat.peek, seat.lift);
+      avatar.setLean(seat.lean);
+    }
+  }
+
+  /**
+   * Turns the player's head toward whatever just mattered.
+   *
+   * A nudge, never a lock — see `attention.ts`. Everything here is driven by
+   * narration the whole table receives, so nobody's attention is pulled toward
+   * something they were not entitled to notice.
+   */
+  /**
+   * Turns the sound on. Must be called from inside a real user gesture.
+   *
+   * Browsers will not start an `AudioContext` before one, and one created too
+   * early is created suspended and stays that way without saying so. Until this
+   * is called everything talks to a silent room instead — see `SILENT_ROOM`.
+   */
+  startAudio(): void {
+    if (this.#audio.running) return;
+    this.#audio = startRoomAudio();
+  }
+
+  /** A breath let out, heard from inside your own head. For composure. */
+  exhale(): void {
+    this.#audio.breath(0.32);
+  }
+
+  notify(events: MatchEvent[]): void {
+    const now = performance.now();
+    for (const event of events) {
+      for (const cue of cuesFor(event, { bigBlind: this.#bigBlind })) this.#audio.play(cue);
+    }
+    for (const event of events) {
+      switch (event.type) {
+        case 'PLAYER_ACTED': {
+          const weight = event.allIn
+            ? ATTENTION_WEIGHT.allIn
+            : event.action.type === 'RAISE' || event.action.type === 'BET'
+              ? ATTENTION_WEIGHT.raise
+              : 0;
+          if (weight > 0) this.#lookAtSeat(event.seatIndex, weight, now);
+          break;
+        }
+        case 'STREET_DEALT':
+          this.seated.focusOn(POT_POSITION, ATTENTION_WEIGHT.deal, now);
+          break;
+        case 'HOLE_CARDS_DEALT':
+          this.seated.focusOn(
+            gazePoint({ kind: 'DEALER' }, this.#seatIndex ?? 0)!,
+            ATTENTION_WEIGHT.deal,
+            now,
+          );
+          break;
+        case 'SHOWDOWN':
+          this.seated.focusOn(POT_POSITION, ATTENTION_WEIGHT.reckoning, now, 2_200);
+          break;
+        case 'ALL_IN_SHOWDOWN':
+          // Hands are going over and the board is about to come. Everybody at
+          // a real table is looking at the middle of it by now.
+          this.seated.focusOn(POT_POSITION, ATTENTION_WEIGHT.reckoning, now, 2_600);
+          break;
+        case 'PLAYER_ELIMINATED':
+          this.#lookAtSeat(event.seatIndex, ATTENTION_WEIGHT.reckoning, now, 2_600);
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  #biasAttention(view: ClientView): void {
+    const acting = view.hand?.actingSeat ?? null;
+    if (acting === this.#actingSeat) return;
+    this.#actingSeat = acting;
+    // Your own turn does not pull your head anywhere; you know where you are.
+    if (acting === null || acting === this.#seatIndex) return;
+    this.#lookAtSeat(acting, ATTENTION_WEIGHT.turn, performance.now());
+  }
+
+  #lookAtSeat(seatIndex: number, weight: number, now: number, durationMs?: number): void {
+    if (seatIndex === this.#seatIndex) return;
+    this.seated.focusOn(seatPoint(seatIndex, RADIUS.body, 1.21), weight, now, durationMs);
   }
 
   #applyAvatars(view: ClientView): void {
@@ -157,31 +495,118 @@ export class GameScene {
   dispose(): void {
     this.stop();
     this.#resizeObserver?.disconnect();
+    this.#motionQuery?.removeEventListener?.('change', this.#onMotionChange);
+    this.peek.detach();
     this.seated.detach();
+    this.#lens?.dispose();
+    this.#lens = null;
+    // The room's sound goes with the room. It used to be left running: an
+    // audio context nobody could hear, held for as long as the page was open.
+    void this.#audio.close();
+    this.#audio = SILENT_ROOM;
     this.renderer.dispose();
   }
 
-  /** Live counters, so the performance budget is something we can watch. */
-  stats(): { drawCalls: number; triangles: number; programs: number } {
+  /**
+   * Live counters, so the performance budget is something we can watch.
+   *
+   * For the whole of the last frame: the shadow pass, the room, and whatever
+   * the lens drew on top.
+   */
+  stats(): { drawCalls: number; triangles: number; programs: number; detail: Detail; frameMs: number } {
     const info = this.renderer.info;
     return {
       drawCalls: info.render.calls,
       triangles: info.render.triangles,
       programs: info.programs?.length ?? 0,
+      detail: this.#detail,
+      frameMs: Math.round((this.#governor?.averageMs ?? 0) * 10) / 10,
     };
   }
 
+  get detail(): Detail {
+    return this.#detail;
+  }
+
+  /**
+   * Sets how much the room is allowed to cost. See `quality.ts`.
+   *
+   * `high` draws through the lens at up to twice the screen's pixels; `low`
+   * draws straight to the screen at one, and the room gives up its lit air and
+   * its candles' light.
+   */
+  setDetail(detail: Detail): void {
+    this.#detail = detail;
+    this.#room.setDetail(detail);
+    // Capped: a 3x retina display would otherwise quadruple the pixel cost for
+    // a scene whose whole point is that most of it is dark.
+    this.renderer.setPixelRatio(detail === 'high' ? Math.min(window.devicePixelRatio, 2) : 1);
+
+    if (detail === 'high' && !this.#lens) {
+      try {
+        this.#lens = createLens(this.renderer);
+      } catch {
+        // No float render targets, or no room for them. The room without a
+        // lens is still the room.
+        this.#lens = null;
+      }
+    } else if (detail === 'low' && this.#lens) {
+      this.#lens.dispose();
+      this.#lens = null;
+    }
+    this.#resize();
+  }
+
   #frame(now: number): void {
-    const delta = Math.min((now - this.#lastFrame) / 1000, 0.1);
+    const elapsed = now - this.#lastFrame;
+    const delta = Math.min(elapsed / 1000, 0.1);
     this.#lastFrame = now;
+    this.renderer.info.reset();
+
+    // A machine that cannot hold the frame rate gives up the lens, once.
+    if (this.#governor?.frame(elapsed)) {
+      console.info('[cursed-poker] frames are slow here; drawing the room more cheaply');
+      this.setDetail('low');
+    }
+
+    // The body first, because everything after it is seen through it.
+    for (const sound of this.#pulse.update(delta)) {
+      if (sound.kind === 'HEARTBEAT') this.#audio.heartbeat(sound.gain, sound.gap);
+      else this.#audio.breath(sound.gain);
+    }
+    const felt = this.#pulse.felt;
+    // Shaking hands make the next movement of a card cost more. They never
+    // move a card that is being held — see `PeekGesture.setUnsteadiness`.
+    this.peek.gesture.setUnsteadiness(felt.unsteadiness);
+    this.seated.setShake(felt.shake);
+
+    this.peek.update(delta);
+    this.#tells.update(delta);
+    this.#cards.updatePoses(this.#tells);
+    this.#dealer.update(delta);
+    this.#room.update(delta);
+    // The listener goes wherever the player's head goes, so a chip pushed in
+    // behind you is behind you.
+    this.#audio.follow(this.seated.camera);
+    for (const avatar of this.#avatars.values()) {
+      avatar.setTells(this.#tells.motion(avatar.seatIndex));
+      avatar.update(delta);
+    }
+
     if (this.#free) {
       this.seated.camera.position.set(this.#free.x, this.#free.y, this.#free.z);
-      this.seated.camera.lookAt(0, 0.8, 0);
+      this.seated.camera.lookAt(...this.#free.at);
     } else {
-      this.seated.update(delta);
+      this.seated.update(delta, now);
     }
-    this.renderer.render(this.scene, this.seated.camera);
-    this.onFrame?.();
+    if (this.#lens) {
+      // The room's mood and the player's own, both already here: see `post.ts`.
+      this.#lens.setMood(this.#dread, felt.tunnel);
+      this.#lens.render(this.scene, this.seated.camera, delta);
+    } else {
+      this.renderer.render(this.scene, this.seated.camera);
+    }
+    this.onFrame?.(delta);
   }
 
   #aspect(): number {
@@ -195,6 +620,12 @@ export class GameScene {
     const height = parent?.clientHeight ?? window.innerHeight;
     if (width === 0 || height === 0) return;
     this.renderer.setSize(width, height, false);
+    this.#lens?.setSize(width, height, this.renderer.getPixelRatio());
     this.seated.setAspect(width / height);
+    this.#room.setViewport(height * this.renderer.getPixelRatio(), this.seated.camera.fov);
   }
+}
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }

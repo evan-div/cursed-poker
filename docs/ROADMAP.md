@@ -80,46 +80,226 @@ animates yet (Phase 6).
 
 ---
 
-## Phase 4 — Physical interactions
+## Phase 4 — Physical interactions ✅ complete
 
-- [ ] Revisit pointer lock for free-look, now that the action bar exists
-- [ ] Progressive analog card peek (hold + move; exposure tracks input)
-- [ ] Owner-only card faces; abstracted peek pose replicated to opponents
-- [ ] Gaze direction as replicated input
-- [ ] Visible card-check behaviour on other avatars
-- [ ] Betting and chip interactions
-- [ ] Camera attention bias — soft pull toward the acting player, instantly
-      overridden by any deliberate look
+- [x] Pointer lock revisited: offered on click, released on Escape, drag-look
+      still works unlocked, and every action has a key so a locked player never
+      has to leave the room to bet
+- [x] Progressive analog card peek — hold right-click or `V`, pull toward you;
+      exposure tracks input continuously and a released card falls
+- [x] **Hole cards arrive when you look at them**, not at the deal. The gesture
+      is load-bearing rather than decorative, and a client that never peeks never
+      receives the cards
+- [x] Owner-only card faces; the peek *pose* replicated, never the card
+- [x] Gaze as a replicated input — a subject (`seat 4`, `own cards`, `the pot`),
+      not a vector, so tell-reading stays a human skill
+- [x] `presence` as a second server channel at 12 Hz, with no per-viewer half
+- [x] Silence replicated as stillness: not reporting is not a way to hide
+- [x] Avatars turn their heads toward what their owner is looking at, and lean
+      over their cards as they lift them
+- [x] Camera attention bias — a soft pull toward the acting player, a raise, a
+      showdown; instantly and completely surrendered to any deliberate look
+- [x] Betting: keyboard bindings, wheel sizing, and "hands on chips" replicated
+      as a tell without ever replicating the amount
+- [x] The Phase 3 HUD card readout removed — the cards are on the table now
+
+**70 new tests** (255 total), and a `__bodies()` dev hook, because two of this
+phase's three real bugs were invisible in a screenshot.
+
+### Revised after the first playtest (280 tests)
+
+- [x] Hole cards dealt **face down**, face on the underside — the earlier version
+      laid them face up, so a hand could be read without ever being touched
+- [x] The peek is a real **bend**: the card is subdivided and curls, far edge
+      pinned, one corner leading
+- [x] Cards carry a faint emissive map, so a curled underside is not a black
+      wedge and the board is legible from a seat
+- [x] **Four-index** card faces, so whichever corner you lift has something on it
+- [x] Gaze dwell (220ms) and a slower, speed-limited neck — sweeping your eyes
+      across the table no longer looks like head-shaking to everyone else
+- [x] Leaning in on the wheel, replicated as a tell, following the whole line of
+      sight rather than pointing at the table centre
+- [x] Log lines draw cards instead of spelling them
+- [x] Fixed: changing seats left the camera behind; the attention bias converged
+      instead of nudging; your head wandered while you were peeking
+
+### Second round of notes (285 tests)
+
+- [x] **Attention is yaw-only.** Every face is at the same height, so a pitch
+      component pushed the same way on every pull and four players acting in
+      turn walked the view up off the felt entirely
+- [x] **The resting gaze aims at your own cards**, not the middle of the table.
+      It used to put your hand at the very bottom edge, so the peel read as
+      "curled as far as it goes and I still cannot see anything"
+- [x] A much stronger peel: most of the card curls, it turns well past vertical,
+      the pull is shorter, and the corner index is half again as large
+- [x] Lifting a card brings your head down to it — without narrowing the view,
+      which would crop the cards it was trying to show you
+
+### Third round (291 tests)
+
+- [x] **Heads pivot at the neck.** The head group's origin was at the avatar's
+      *feet*, so turning to look at somebody swung the head through a metre-wide
+      arc around the floor and off the body entirely
+- [x] Head yaw clamped to 72°, tighter than the camera's own limits — a rigid
+      avatar craning like a person turning their whole torso looks broken
+- [x] Peel folds the corner right back over (2.9 rad), and bending over a card
+      reaches nearly twice as far as leaning at the board
+- [x] Bigger cards in the activity log
+
+### Fourth round (307 tests)
+
+- [x] **Real card faces**: two corner indices and the standard pip layouts, not
+      the four-index deck that solved the peeking problem and looked wrong
+- [x] Court cards as a monogram — a procedurally drawn king is a bad king
+- [x] **Pulling past a full curl picks the cards up off the table**, through a
+      short dead zone so it is never an overshoot. Replicated as its own field:
+      it is the most conspicuous thing anybody can do at this table
+
+### Fifth round (333 tests)
+
+- [x] **Hands do the peeling.** Two-bone IK (`ik.ts`) puts the right hand on the
+      corner it is curling and carries the cards up with it
+- [x] Fingers hinge at the knuckle and curl — they were meshes centred on their
+      own middles, which bent a finger around a point in mid-air
+- [x] The off hand comes up to shield a raised pair
+- [x] `hold.ts`: one set of numbers for where a card is, read by both the card
+      renderer and the avatar, so the hand and the card cannot disagree
 
 ---
 
-## Phase 5 — The Dealer and atmosphere
+## Phase 5 — The Dealer and atmosphere — complete except real-hardware frame times
 
-- [ ] Dealer model: tall, hooded, face lost in black, two dim red eyes
-- [ ] Deal / watch / lean / rise animation set
-- [ ] Independent head tracking; unnatural stillness; occasional twitch
-- [ ] Lighting pass; positional audio foundation
-- [ ] `HorrorDirector` v1 driven by player count, elapsed time, sacrifices, eliminations
+The decision the phase turns on: **the Dealer is a server-owned fact.** He
+rides the presence channel, identically, to everybody, at the same tick. Six
+clients each inventing their own would produce six different evenings, and
+nobody could ever say *did you see that?* and be answered.
+
+- [x] Dealer model: tall, hooded, face lost in black, two dim red eyes that
+      burn harder as the room turns
+- [x] Lighting that lets a lifted card be read without flattening the room — a
+      short-range light carried at the player's own eye, up only while their
+      cards are, dying well before the felt
+- [x] Deal / watch / lean / rise posture set, decided on the server
+- [x] Independent head tracking; **no idle at all** (a test asserts he does not
+      move by a millionth of a metre over a minute); twitches replicated as
+      timestamped moments rather than flags
+- [x] Lighting pass driven by dread — the lamp dims, reddens and narrows, fog
+      thickens, and past a threshold the light stops being quite steady
+- [x] Positional audio foundation: cues as pure data, sounds synthesised rather
+      than loaded, nothing audible that is not already public
+- [x] `HorrorDirector` v1 (`dreadLevel`) driven by player count, elapsed time,
+      sacrifices, eliminations — every input only ever increases, so the room
+      never gets better
+
+Two walls tested through whole running matches, both verified to fail when
+deliberately broken: the cards cannot reach the Dealer, and the Dealer cannot
+reach the cards (his chance and the shuffle's chance are different objects).
+
+- [x] Dread curve tuned against played-out matches rather than against reasoning
+      about one — `dread-profile.test.ts` plays whole evenings and counts what
+      the Dealer actually did
+
+Profiling a real evening found three thresholds that were correct, commented,
+and **never once reached**: `DEALING` asked the match whether it was mid-deal
+(a match is never mid-anything), and both `LEANING` and `RISEN` sat above the
+highest dread a live match can hold. A six-hander ends the moment the fifth
+player busts, so while anyone is still playing at most four chairs are empty —
+the ceiling is 0.77, and `riseAbove` was 0.78. Fixing that for six-handed play
+left four-handed (ceiling 0.717) exactly as broken, so there is now a test that
+checks every threshold against every seat count.
+
+Six-handed, forty-six minutes, a hundred and twenty-six hands: STILL 6%,
+DEALING 15%, WATCHING 39%, LEANING 20%, RISEN 21%, ending at 0.85 dread.
+
+Still open in this phase:
+
+- [ ] Frame times on real hardware; the automated runs use software rendering
 
 ---
 
-## Phase 6 — Heart rate and tells
+## Phase 6 — Heart rate and tells ✅ complete
 
-- [ ] Server-side stress model with named stress events
-- [ ] First-person feedback: heartbeat, breathing, tremor, camera instability,
-      tunnel vision, unsteady peeking
-- [ ] Server-derived third-person tell state (`tremor`, `breathing`, `sweat`, …)
-- [ ] Avatar tell visualization
-- [ ] Telemetry/replay harness so tuning is data-driven
+- [x] Server-side stress model with named stress events — spikes that decay,
+      a floor that does not, and **no card anywhere in its inputs**
+      (`stress-boundary.test.ts` deals two tables different decks under one
+      script and requires every heart and tell to match while a hand is live)
+- [x] Server-derived third-person tell state (`tremor`, `breathing`, `sweat`),
+      quantised to eight steps before it is broadcast
+- [x] A third server channel, `self`: your own heart, at 4 Hz, to your socket
+      alone. Views only move when poker does; a heart has to settle while you
+      think and rise when the Dealer looks at you
+- [x] First-person feedback: an audible heartbeat (lub-dub, inside your head
+      rather than in the room), breathing you can see and, past a point, hear;
+      head tremor; tunnel vision that throbs with the pulse
+- [x] Tremor fed into `PeekGesture`'s `unsteadiness` — the next pull costs
+      more, a card already held never moves on its own
+- [x] Camera shake is applied to what you *see*, never to where the table is
+      told you are *looking*: gaze resolved from a shaking camera would flicker
+      at the rate of your tremor and broadcast it at full resolution
+- [x] Tunnel vision sits under the nameplates and HUD: fear may darken the
+      room, never a stack, an action or a button
+- [x] `prefers-reduced-motion` removes the shake and the throb, keeps the
+      sound and the closing edges
+- [x] Avatar tell visualization: hands that will not stay still on the felt,
+      a raised pair that trembles with the hand holding it, shoulders rising
+      faster and deeper, skin that shines and flushes and finally beads. Driven
+      by each seat's three broadcast tells and nothing else — a test feeds two
+      tables identical tells for one seat and different everything-else, and
+      requires identical motion. Your own hands shake on your screen exactly as
+      they do on everybody else's, from the same broadcast
+- [x] Telemetry/replay harness so tuning is data-driven. Matches record the
+      stress model's public inputs (opt-in, `STRESS_TELEMETRY_DIR`); recordings
+      replay under any tuning; `npm run stress` compares tunings over simulated
+      or recorded evenings. First findings, from bots:
+  - stress does rise across an evening (mean 0.13 → 0.22 by the last quarter),
+    but mostly through the floor, which tops out below where hands start to
+    shake — so late shaking still comes from spikes, and bots cannot say
+    whether that is enough. Needs real recordings
+  - three named events never fired: `CLOCK_LOW`, `RE_CHECKED` and `WATCHED`
+    had weights and nothing raised them. **Now wired**: a clock under eight
+    seconds, once per decision; the Dealer turning to you, at most once per
+    ten seconds; lifting your cards again in the same hand, counted from the
+    curl the table sees and at most once per four seconds. The profile now
+    requires every named event to happen in an ordinary evening
+  - with those wired, the Dealer's stare was the single largest source of
+    stress in a bot evening (about a quarter of everything added), from the
+    first hand on. **Now scaled with dread**: a stare lands at a fifth of its
+    weight in a fresh room and at full weight in a dark one. Same evenings,
+    same 412 stares: their share fell from 41.2 to 18.8 (about a seventh),
+    the first quarter got calmer (0.147 → 0.130) while the last barely moved
+    (0.262 → 0.255), so the evening's rise is steeper
 
 ---
 
-## Phase 7 — Composure
+## Phase 7 — Composure ✅ complete
 
-- [ ] `ComposureChallenge` interface (issue → input → server-validated result)
-- [ ] One prototype minigame behind it
-- [ ] Success reduces visible tells; failure temporarily worsens them
-- [ ] Verify a second minigame can be swapped in without touching the stress model
+- [x] `ComposureChallenge` interface (issue → input → server-validated result).
+      The client sends raw key presses with no timestamps; the server times
+      them on arrival and judges *intervals*, so latency cancels and there is
+      no message that can claim a result
+- [x] One prototype minigame behind it: **steady breath** — tap a slow,
+      uneven rhythm while your own racing heartbeat is in your ears
+- [x] Success reduces visible tells; failure temporarily worsens them. Applied
+      between the stress model and the broadcast: it changes what the table
+      is *shown*, never what you feel — your heart rate does not move
+- [x] Verify a second minigame can be swapped in without touching the stress
+      model: **hold your breath** ships as the second kind, and a test plugs in
+      a third that exists only in the test file and runs it through a match.
+      An import-graph test holds that the stress model and the minigames cannot
+      name each other
+- [x] Steadying yourself is a visible act: the whole table sees your head go
+      down and your breathing slow and deepen, for as long as the challenge
+      runs. Broadcast as one bit (`composing`) — never which challenge, its
+      rhythm, its progress or its outcome; the table reads how it went from
+      your tells afterwards. A player doing well and one doing nothing look
+      identical until they finish
+- [x] The challenge itself stays private: its kind, rhythm and result reach
+      their owner only — not even an empty view refresh reaches anybody else
+      at the moment somebody starts
+- [x] Through the card boundary: the two-decks test now has every player
+      attempting composure, and tells still agree tick for tick while a hand
+      is live
 
 ---
 
@@ -172,9 +352,10 @@ animates yet (Phase 6).
 
 ```bash
 npm install
-npm test              # 156 tests
+npm test              # 646 tests
 npm run typecheck
 npm run sim           # whole-match fuzzing only
+npm run stress        # the stress model over whole evenings
 ```
 
 To actually play:
@@ -188,3 +369,17 @@ Open <http://localhost:5173> in four to six tabs or browsers. One creates a
 lobby, the rest join with the code, everyone readies up, the host begins. Set
 `SESSION_SECRET` to keep reconnect tokens working across a server restart. See
 the README for what to check if the UI shows `offline`.
+
+At the table:
+
+| | |
+|---|---|
+| Look around | drag, or click the table for pointer lock (Escape releases) |
+| **Look at your cards** | hold right-click or `V`, then pull the mouse toward you |
+| Lean in / sit back | mouse wheel over the table — everyone can see you do it |
+| Act | `F` fold · `C` check/call · `R` raise · `A` all in, or click |
+| Size a bet | the slider, or the mouse wheel over it |
+| Steady yourself | `B`, then `Space` — everyone sees you do it |
+
+You will not see your own cards until you lift them, and everyone else can see
+you do it.

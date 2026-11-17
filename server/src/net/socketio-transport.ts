@@ -1,4 +1,5 @@
 import type { Server as SocketIoServer, Socket } from 'socket.io';
+import { clientAddress } from './client-address.js';
 import type { AckFn, Connection, InboundHandler, Transport, ServerMessageName, ServerPayload } from './transport.js';
 
 /**
@@ -14,10 +15,16 @@ export class SocketIoTransport implements Transport {
   readonly #io: SocketIoServer;
   #handler: ((connection: Connection) => void) | null = null;
 
-  constructor(io: SocketIoServer) {
+  /**
+   * `trustedProxies` is how many reverse proxies stand in front of this server,
+   * for working out whose address a connection really has. See
+   * `client-address.ts`; zero, the default, believes only the socket.
+   */
+  constructor(io: SocketIoServer, options: { trustedProxies?: number } = {}) {
     this.#io = io;
+    const trustedProxies = options.trustedProxies ?? 0;
     this.#io.on('connection', (socket) => {
-      this.#handler?.(new SocketConnection(socket));
+      this.#handler?.(new SocketConnection(socket, trustedProxies));
     });
   }
 
@@ -32,9 +39,18 @@ export class SocketIoTransport implements Transport {
 
 class SocketConnection implements Connection {
   readonly #socket: Socket;
+  readonly #address: string;
 
-  constructor(socket: Socket) {
+  constructor(socket: Socket, trustedProxies: number) {
     this.#socket = socket;
+    // Worked out once, from the handshake: it is what the connection was when
+    // it was made, and a rate limit keyed on something that could change
+    // mid-connection would be a rate limit somebody could step round.
+    this.#address = clientAddress(
+      socket.handshake.headers['x-forwarded-for'],
+      socket.handshake.address,
+      trustedProxies,
+    );
   }
 
   get id(): string {
@@ -42,9 +58,7 @@ class SocketConnection implements Connection {
   }
 
   get remoteAddress(): string {
-    // Behind a reverse proxy this needs `trust proxy` handling before it can be
-    // used for rate limiting in production.
-    return this.#socket.handshake.address || 'unknown';
+    return this.#address;
   }
 
   send<K extends ServerMessageName>(name: K, payload: ServerPayload<K>): void {

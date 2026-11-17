@@ -88,9 +88,23 @@ export const EYE_HEIGHT = 1.22;
  *
  * Looking dead level from a chair points you across the table into the dark,
  * which is atmospheric and useless. A real player's resting gaze is down on the
- * felt, and this is the angle from the eye to the middle of the table.
+ * felt — but *how far* down matters more than it looks.
+ *
+ * The first version aimed at the middle of the table, which put a player's own
+ * two cards at the very bottom edge of the screen: every hand began by dragging
+ * the view down a hundred pixels to find your own hand, and if you did not know
+ * to do that, the answer to "what have I got?" was a sliver of card at the
+ * bottom of the frame. So the rest aims most of the way toward your own cards
+ * instead. The board is still comfortably in view; opponents' faces are a
+ * deliberate look up, which is the right way round — raising your eyes to
+ * somebody is the thing worth noticing.
  */
-export const REST_PITCH = -Math.atan2(EYE_HEIGHT - TABLE.surfaceHeight, RADIUS.eye);
+const REST_AIM_TOWARD_OWN_CARDS = 0.68;
+
+const REST_AIM_DISTANCE =
+  RADIUS.eye - REST_AIM_TOWARD_OWN_CARDS * (RADIUS.eye - RADIUS.holeCards);
+
+export const REST_PITCH = -Math.atan2(EYE_HEIGHT - TABLE.surfaceHeight, REST_AIM_DISTANCE);
 
 /** The five community cards, laid left to right across the middle. */
 export const BOARD = {
@@ -174,33 +188,154 @@ export const CHIP = {
   /** Chips are stacked this high before a new stack is started beside it. */
   perStack: 20,
   /** Gap between the centres of neighbouring stacks. */
-  stackSpacing: 0.045,
+  stackSpacing: 0.043,
 } as const;
 
 /**
- * How many chips to show for an amount.
+ * What each colour of chip is worth, in quarters of a big blind.
  *
- * A stack is a *feeling*, not an accounting record: the authoritative number is
- * the one on the HUD. Showing one chip per unit would be thousands of meshes,
- * so a chip is worth a fixed fraction of a big blind and the pile is capped at
- * something a person could plausibly have in front of them.
+ * Relative to the blinds rather than in chips, so a stack looks the same at
+ * every level: a hundred big blinds is the same pile whether the big blind is
+ * a hundred or a thousand. That was already true when a pile was simply a count;
+ * it stays true now that the colours mean something.
  */
-export function chipCountFor(amount: number, bigBlind: number, max = 120): number {
-  if (amount <= 0 || bigBlind <= 0) return 0;
-  const perChip = bigBlind / 4;
-  return clamp(Math.round(amount / perChip), 1, max);
+export const CHIP_VALUES = [1, 4, 20, 100, 400] as const;
+
+/**
+ * How many extra groups of small chips a stack keeps instead of colouring up.
+ *
+ * Nobody sits behind the fewest chips that could make their total. A real stack
+ * has change in it, and the change is most of its bulk — which matters here,
+ * because the size of a pile is the first thing anybody reads across a table.
+ */
+const CHIP_CHANGE = [2, 3, 3, 2] as const;
+
+/**
+ * Breaks an amount into chips, cheapest colour first.
+ *
+ * A pile is still a *feeling*, not a ledger — the authoritative number is on the
+ * nameplate — but it is now an honest one. Ten big blinds is a short stack of
+ * small chips; three hundred is the same change with a tower of big ones behind
+ * it. The old pile was a count capped at ninety, so everybody with more than
+ * twenty big blinds had exactly the same stack and the chip leader looked like
+ * the player about to bust.
+ */
+export function chipBreakdown(amount: number, bigBlind: number): number[] {
+  const counts = CHIP_VALUES.map(() => 0);
+  if (amount <= 0 || bigBlind <= 0) return counts;
+
+  // In quarter blinds, and never nothing: one chip is still a chip.
+  let left = Math.max(1, Math.round((amount * 4) / bigBlind));
+  const last = CHIP_VALUES.length - 1;
+  for (let i = 0; i < last; i++) {
+    const value = CHIP_VALUES[i]!;
+    const next = CHIP_VALUES[i + 1]!;
+    // Enough of this colour that the rest divides into the next one up, plus
+    // some change kept back.
+    const needed = (left % next) / value;
+    const spare = Math.min(Math.floor(left / next), CHIP_CHANGE[i]!) * (next / value);
+    counts[i] = needed + spare;
+    left -= counts[i]! * value;
+  }
+  counts[last] = left / CHIP_VALUES[last]!;
+  return counts;
 }
 
-/** Lays `count` chips into stacks, returning each chip's offset from the pile. */
-export function chipPile(count: number): Vec3[] {
-  const out: Vec3[] = [];
-  const stacks = Math.ceil(count / CHIP.perStack);
-  for (let i = 0; i < count; i++) {
-    const stack = Math.floor(i / CHIP.perStack);
-    const height = i % CHIP.perStack;
-    // Centre the row of stacks on the pile's own position.
-    const x = (stack - (stacks - 1) / 2) * CHIP.stackSpacing;
-    out.push({ x, y: CHIP.height * (height + 0.5), z: 0 });
+/** One chip, placed: where it is, which colour, and how it happens to be turned. */
+export interface PlacedChip extends Vec3 {
+  /** Index into `CHIP_VALUES`. */
+  denomination: number;
+  /** Radians about the vertical. Nobody stacks chips with the spots lined up. */
+  turn: number;
+}
+
+/** A repeatable number in [0, 1) for a chip's place in a pile. */
+function jitter(a: number, b: number): number {
+  let h = Math.imul(a + 1, 0x27d4eb2d) ^ Math.imul(b + 7, 0x165667b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  return ((h ^ (h >>> 13)) >>> 0) / 4_294_967_296;
+}
+
+/**
+ * Lays chips out as a player keeps them: stacks by colour, big ones at the back.
+ *
+ * Two rows, staggered, so six or seven stacks take up the room of four. Offsets
+ * are from the pile's own position, with +x to the owner's right and +z toward
+ * them.
+ */
+export function chipStacks(counts: readonly number[], perStack: number = CHIP.perStack, most = 120): PlacedChip[] {
+  // A stack per colour, split when it gets too tall, most valuable first.
+  const stacks: { denomination: number; height: number }[] = [];
+  let budget = most;
+  for (let denomination = counts.length - 1; denomination >= 0; denomination--) {
+    let left = Math.min(counts[denomination] ?? 0, budget);
+    budget -= left;
+    while (left > 0) {
+      const height = Math.min(left, perStack);
+      stacks.push({ denomination, height });
+      left -= height;
+    }
+  }
+
+  const out: PlacedChip[] = [];
+  const columns = Math.ceil(stacks.length / 2);
+  stacks.forEach((stack, index) => {
+    // Back row first, then the front row tucked into the gaps.
+    const front = index >= columns;
+    const column = front ? index - columns : index;
+    const inRow = front ? stacks.length - columns : columns;
+    // Each row is centred. A front row one shorter than the back already sits
+    // in the gaps; one the same length is shifted half a stack to get there.
+    const x =
+      (column - (inRow - 1) / 2) * CHIP.stackSpacing + (front && inRow === columns ? CHIP.stackSpacing / 2 : 0);
+    const z = front ? CHIP.stackSpacing * 0.43 : -CHIP.stackSpacing * 0.43;
+    for (let level = 0; level < stack.height; level++) {
+      out.push({
+        x: x + (jitter(index, level) - 0.5) * 0.0016,
+        y: CHIP.height * (level + 0.5),
+        z: z + (jitter(level, index) - 0.5) * 0.0016,
+        denomination: stack.denomination,
+        turn: jitter(index * 31 + level, 5) * Math.PI * 2,
+      });
+    }
+  });
+  return out;
+}
+
+/**
+ * Lays chips out as a pot: pushed together, not stacked.
+ *
+ * Little piles a few chips high, spiralling out from the middle, so a pot that
+ * has been bet into four times is visibly a heap and one with the blinds in it
+ * is a few chips on the cloth.
+ */
+export function chipHeap(counts: readonly number[], most = 120): PlacedChip[] {
+  const chips: number[] = [];
+  for (let denomination = counts.length - 1; denomination >= 0; denomination--) {
+    for (let i = 0; i < (counts[denomination] ?? 0) && chips.length < most; i++) chips.push(denomination);
+  }
+
+  const out: PlacedChip[] = [];
+  let pile = 0;
+  let level = 0;
+  let tall = 4;
+  for (const [index, denomination] of chips.entries()) {
+    if (level >= tall) {
+      pile++;
+      level = 0;
+      tall = 2 + Math.floor(jitter(pile, 11) * 4);
+    }
+    // The golden angle: every pile lands in the widest gap left by the others.
+    const angle = pile * 2.399963;
+    const radius = CHIP.radius * 1.55 * Math.sqrt(pile);
+    out.push({
+      x: Math.cos(angle) * radius + (jitter(index, 13) - 0.5) * 0.006,
+      y: CHIP.height * (level + 0.5),
+      z: Math.sin(angle) * radius + (jitter(index, 17) - 0.5) * 0.006,
+      denomination,
+      turn: jitter(index, 19) * Math.PI * 2,
+    });
+    level++;
   }
   return out;
 }
